@@ -1,0 +1,17 @@
+nombre: exp_00_base
+semilla: 42
+data: RUTA/AL/data.yaml        # data.yaml YOLO del dataset de Duotek (listas train/val); completar
+modelo: yolov8n.pt             # LÍNEA BASE: mismo modelo y parámetros que exp_01 del Lab 15
+imgsz: 640
+epochs: 50
+batch: 16
+optimizer: AdamW
+lr0: 0.001
+patience: 15
+hsv_h: 0.015
+hsv_s: 0.5
+hsv_v: 0.4
+mosaic: 1.0
+fliplr: 0.5
+# device: cpu                  # opcional: "cpu", "0" (GPU 0)
+# workers: 2                   # opcional: bajar si hay problemas de memoria en Windows

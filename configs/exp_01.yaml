@@ -1,0 +1,16 @@
+nombre: exp_01
+semilla: 42
+zip_dataset: /content/drive/MyDrive/Lab15_Angelo_Luis/Dataset/Dataset_Limpio.zip
+incluir_sin_etiqueta: true     
+modelo: yolov8n.pt             # YOLO chico preentrenado (base)
+imgsz: 640
+epochs: 50
+batch: 16
+optimizer: AdamW
+lr0: 0.001
+patience: 15                  
+hsv_h: 0.015
+hsv_s: 0.5
+hsv_v: 0.4                     
+mosaic: 1.0
+fliplr: 0.5

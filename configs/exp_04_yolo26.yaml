@@ -1,0 +1,17 @@
+nombre: exp_04_yolo26
+semilla: 42
+data: RUTA/AL/data.yaml        # el MISMO data.yaml que la línea base; completar
+modelo: yolo26n.pt             # único cambio respecto a exp_00_base (yolov8n.pt)
+imgsz: 640
+epochs: 50
+batch: 16
+optimizer: AdamW               # igual que la base, para comparar en igualdad de condiciones
+lr0: 0.001
+patience: 15
+hsv_h: 0.015
+hsv_s: 0.5
+hsv_v: 0.4
+mosaic: 1.0
+fliplr: 0.5
+# device: cpu
+# workers: 2

@@ -1,0 +1,37 @@
+# Entornos y cachés
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Datos confidenciales de Duotek: NUNCA subir videos, cuadros ni etiquetas
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.tar
+*.zip
+data/
+datos/
+dataset/
+Dataset*/
+runs/
+labelstudio/
+
+# Pesos: solo se versiona el modelo por defecto (exp_01); el resto se comparte aparte
+*.pt
+!weights/exp_01.pt
+
+# Archivos de asistentes de IA / memorias (no van al repo)
+.claude/
+CLAUDE.md
+memory/
+MEMORY.md
+
+# Sistema / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

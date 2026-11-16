@@ -1,0 +1,31 @@
+{
+  "nombre": "exp_01_fold3",
+  "fold": 3,
+  "config": {
+    "nombre": "exp_01",
+    "semilla": 42,
+    "zip_dataset": "/content/drive/MyDrive/Lab15_Angelo_Luis/Dataset/Dataset_Limpio.zip",
+    "incluir_sin_etiqueta": true,
+    "modelo": "yolov8n.pt",
+    "imgsz": 640,
+    "epochs": 50,
+    "batch": 16,
+    "optimizer": "AdamW",
+    "lr0": 0.001,
+    "patience": 15,
+    "hsv_h": 0.015,
+    "hsv_s": 0.5,
+    "hsv_v": 0.4,
+    "mosaic": 1.0,
+    "fliplr": 0.5
+  },
+  "conteos": {
+    "train": 1150,
+    "val": 74
+  },
+  "val_mAP50": 0.9829,
+  "val_mAP50_95": 0.6745,
+  "val_precision": 0.9764,
+  "val_recall": 0.9551,
+  "duracion_min": 18.5
+}

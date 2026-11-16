@@ -1,0 +1,16 @@
+nombre: exp_03
+semilla: 42
+zip_dataset: /content/drive/MyDrive/Lab15_Angelo_Luis/Dataset/Dataset_Limpio.zip
+incluir_sin_etiqueta: true
+modelo: yolov8n.pt             # mismo modelo que exp_01
+imgsz: 1088                    # único cambio respecto a exp_01: resolución planeada en la presentación
+epochs: 50
+batch: 8                       # bajamos el batch para que quepa en memoria a mayor resolución
+optimizer: AdamW
+lr0: 0.001
+patience: 15
+hsv_h: 0.015
+hsv_s: 0.5
+hsv_v: 0.4
+mosaic: 1.0
+fliplr: 0.5

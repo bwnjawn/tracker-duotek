@@ -1,0 +1,43 @@
+{
+  "config": "exp_01",
+  "folds": {
+    "seq_0001": {
+      "val_mAP50": 0.9913,
+      "val_mAP50_95": 0.6452,
+      "val_precision": 0.9682,
+      "val_recall": 0.9669
+    },
+    "seq_0002": {
+      "val_mAP50": 0.957,
+      "val_mAP50_95": 0.5859,
+      "val_precision": 0.8886,
+      "val_recall": 0.9273
+    },
+    "seq_0003": {
+      "val_mAP50": 0.9829,
+      "val_mAP50_95": 0.6745,
+      "val_precision": 0.9764,
+      "val_recall": 0.9551
+    },
+    "seq_0005": {
+      "val_mAP50": 0.9524,
+      "val_mAP50_95": 0.6032,
+      "val_precision": 0.8603,
+      "val_recall": 0.9355
+    },
+    "seq_0006": {
+      "val_mAP50": 0.9848,
+      "val_mAP50_95": 0.6663,
+      "val_precision": 0.9367,
+      "val_recall": 0.9709
+    }
+  },
+  "val_mAP50_media": 0.9737,
+  "val_mAP50_desv": 0.0177,
+  "val_mAP50_95_media": 0.635,
+  "val_mAP50_95_desv": 0.0389,
+  "val_precision_media": 0.926,
+  "val_precision_desv": 0.0504,
+  "val_recall_media": 0.9511,
+  "val_recall_desv": 0.0192
+}

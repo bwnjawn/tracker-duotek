@@ -1,0 +1,17 @@
+[project]
+name = "grupo-angelo-luis"
+version = "0.1.0"
+description = "Contador automatizado de salmones con YOLO y ByteTrack"
+requires-python = ">=3.10"
+dependencies = [
+    "ultralytics>=8.3.0,<9",
+    "pyyaml>=6.0",
+    "opencv-python-headless>=4.8,<5",
+    "lap>=0.5.12",
+]
+
+[dependency-groups]
+dev = [
+    "opencv-python-headless>=4.14.0.94",
+    "pytest>=9.2.0",
+]
