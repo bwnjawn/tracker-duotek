@@ -2,7 +2,7 @@
 name = "grupo-angelo-luis"
 version = "0.1.0"
 description = "Contador automatizado de salmones con YOLO y ByteTrack"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.15"
 dependencies = [
     "ultralytics>=8.3.0,<9",
     "pyyaml>=6.0",
