@@ -24,6 +24,9 @@ labelstudio/
 *.pt
 !weights/exp_01.pt
 
+# Notas internas del grupo (no se suben)
+spec/
+
 # Archivos de asistentes de IA / memorias (no van al repo)
 .claude/
 CLAUDE.md
