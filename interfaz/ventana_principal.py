@@ -12,7 +12,9 @@ from PySide6.QtWidgets import (
     QSpinBox, QVBoxLayout, QWidget,
 )
 
-from .canales import Canal, ConfigCanales
+from src.canales import Canal
+
+from . import canales as cn
 from .reproductor import Reproductor
 from .vista_video import VistaVideo
 
@@ -29,7 +31,7 @@ class VentanaPrincipal(QMainWindow):
         self.resize(1100, 650)
 
         self.reproductor = Reproductor(self)
-        self.config = ConfigCanales()
+        self.canales: list[Canal] = []
         self.vista = VistaVideo()
         self._sincronizando = False
 
@@ -144,7 +146,6 @@ class VentanaPrincipal(QMainWindow):
         self.barra.setEnabled(True)
         for b in (self.btn_atras, self.btn_play, self.btn_adelante):
             b.setEnabled(True)
-        self.config.video, self.config.ancho, self.config.alto = ruta, r.ancho, r.alto
         self.setWindowTitle(f"Tracker – {Path(ruta).name}")
         self._sync_spin()
 
@@ -168,25 +169,25 @@ class VentanaPrincipal(QMainWindow):
         if it is None:
             return None
         cid = it.data(Qt.UserRole)
-        return next((c for c in self.config.canales if c.id == cid), None)
+        return next((c for c in self.canales if c.id == cid), None)
 
     def _dims(self) -> tuple[int, int]:
         r = self.reproductor
-        return (r.ancho, r.alto) if r.abierto else (self.config.ancho, self.config.alto)
+        return (r.ancho, r.alto) if r.abierto else (0, 0)
 
-    def _refrescar_lista(self, seleccionar: int | None = None) -> None:
-        """Reconstruye la lista. `seleccionar`: id a dejar seleccionado (0 = ninguno);
+    def _refrescar_lista(self, seleccionar: str | None = None) -> None:
+        """Reconstruye la lista. `seleccionar`: id a dejar seleccionado ("" = ninguno);
         si es None se conserva la selección actual."""
         if seleccionar is None:
             actual = self._canal_sel()
-            seleccionar = actual.id if actual else 0
+            seleccionar = actual.id if actual else ""
         self.lista.blockSignals(True)
         self.lista.clear()
         fila = -1
-        for i, c in enumerate(self.config.canales):
-            it = QListWidgetItem(f"{c.id}: {c.nombre}")
+        for i, c in enumerate(self.canales):
+            it = QListWidgetItem(c.nombre)
             pm = QPixmap(14, 14)
-            pm.fill(QColor(c.color))
+            pm.fill(QColor(cn.color_de(i)))
             it.setIcon(QIcon(pm))
             it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
             it.setCheckState(Qt.Checked if c.seleccionado else Qt.Unchecked)
@@ -196,35 +197,35 @@ class VentanaPrincipal(QMainWindow):
                 fila = i
         self.lista.setCurrentRow(fila)
         self.lista.blockSignals(False)
-        self.vista.set_canales(self.config.canales)
-        self.vista.set_seleccion(seleccionar if fila >= 0 else 0)
+        self.vista.set_canales(self.canales)
+        self.vista.set_seleccion(seleccionar if fila >= 0 else "")
         self._sync_spin()
 
     def _agregar_canal(self, x: float, y: float, w: float, h: float) -> None:
-        n = self.config.siguiente_id()
-        self.config.canales.append(Canal(n, f"Tubo {n}", (x, y, w, h)))
-        self._refrescar_lista(seleccionar=n)
+        c = cn.nuevo_canal(self.canales, (x, y, w, h))
+        self.canales.append(c)
+        self._refrescar_lista(seleccionar=c.id)
 
     def _quitar_canal(self) -> None:
         c = self._canal_sel()
         if c is None:
             return
-        self.config.canales = [k for k in self.config.canales if k.id != c.id]
-        self._refrescar_lista(seleccionar=0)
+        self.canales = [k for k in self.canales if k.id != c.id]
+        self._refrescar_lista(seleccionar="")
 
     def _on_item_cambiado(self, it: QListWidgetItem) -> None:
         cid = it.data(Qt.UserRole)
-        for c in self.config.canales:
+        for c in self.canales:
             if c.id == cid:
                 c.seleccionado = it.checkState() == Qt.Checked
-        self.vista.set_canales(self.config.canales)
+        self.vista.set_canales(self.canales)
 
     # selección sincronizada lista <-> video
     def _on_lista_actual(self, actual: QListWidgetItem | None, _previo=None) -> None:
-        self.vista.set_seleccion(actual.data(Qt.UserRole) if actual else 0)
+        self.vista.set_seleccion(actual.data(Qt.UserRole) if actual else "")
         self._sync_spin()
 
-    def _on_vista_seleccion(self, canal_id: int) -> None:
+    def _on_vista_seleccion(self, canal_id: str) -> None:
         fila = next(
             (i for i in range(self.lista.count())
              if self.lista.item(i).data(Qt.UserRole) == canal_id), -1)
@@ -233,7 +234,7 @@ class VentanaPrincipal(QMainWindow):
         self.lista.blockSignals(False)
         self._sync_spin()
 
-    def _on_canal_modificado(self, canal_id: int) -> None:
+    def _on_canal_modificado(self, canal_id: str) -> None:
         c = self._canal_sel()
         if c is not None and c.id == canal_id:
             self._sync_spin()
@@ -241,11 +242,12 @@ class VentanaPrincipal(QMainWindow):
     # edición numérica (px) del canal seleccionado
     def _sync_spin(self) -> None:
         c, (W, H) = self._canal_sel(), self._dims()
-        ok = c is not None and W > 0 and H > 0
+        # las casillas solo aplican a rectángulos; un polígono libre no las usa
+        ok = c is not None and cn.es_rectangulo(c) and W > 0 and H > 0
         self.caja.setEnabled(ok)
         if not ok:
             return
-        x, y, w, h = c.rect
+        x, y, w, h = cn.caja(c)
         self._sincronizando = True
         for n, tope in (("x", W), ("y", H), ("ancho", W), ("alto", H)):
             self.spin[n].setRange(0, tope)
@@ -259,27 +261,28 @@ class VentanaPrincipal(QMainWindow):
         if self._sincronizando:
             return
         c, (W, H) = self._canal_sel(), self._dims()
-        if c is None or W <= 0 or H <= 0:
+        if c is None or not cn.es_rectangulo(c) or W <= 0 or H <= 0:
             return
         w = min(max(self.spin["ancho"].value() / W, 0.01), 1.0)
         h = min(max(self.spin["alto"].value() / H, 0.01), 1.0)
         x = min(max(self.spin["x"].value() / W, 0.0), 1.0 - w)
         y = min(max(self.spin["y"].value() / H, 0.0), 1.0 - h)
-        c.rect = (x, y, w, h)
-        self.vista.set_canales(self.config.canales)
+        cn.fijar_rect(c, (x, y, w, h))
+        self.vista.set_canales(self.canales)
         self._sync_spin()  # refleja si hubo que ajustar algún valor
 
     # ----------------------------------------------------------- persistencia
     def guardar_config(self) -> None:
-        if not self.config.canales:
+        if not self.canales:
             QMessageBox.information(self, "Sin canales", "Marca al menos un canal antes de guardar.")
             return
         ruta, _ = QFileDialog.getSaveFileName(
             self, "Guardar configuración", "canales.json", "JSON (*.json)"
         )
         if ruta:
+            r = self.reproductor
             try:
-                self.config.guardar(ruta)
+                cn.guardar(ruta, self.canales, r.ruta if r.abierto else "", r.ancho, r.alto)
             except OSError as e:
                 QMessageBox.warning(self, "Error", f"No se pudo guardar:\n{e}")
 
@@ -291,15 +294,22 @@ class VentanaPrincipal(QMainWindow):
         if not ruta:
             return
         try:
-            cfg = ConfigCanales.cargar(ruta)
+            canales, video = cn.cargar(ruta)
         except ValueError as e:
             QMessageBox.warning(self, "Error", str(e))
             return
-        self.config.canales = cfg.canales
-        # si no hay video abierto y el de la configuración existe, se abre solo
-        if not self.reproductor.abierto and cfg.video and Path(cfg.video).exists():
-            self.reproductor.abrir(cfg.video)
-        self._refrescar_lista(seleccionar=0)
+        self.canales = canales
+        self._refrescar_lista(seleccionar="")
+        # El JSON guarda solo el nombre del video: se busca junto al archivo de canales.
+        if not self.reproductor.abierto and video and video.get("archivo"):
+            candidato = Path(ruta).parent / video["archivo"]
+            if candidato.exists():
+                self.reproductor.abrir(str(candidato))
+            else:
+                QMessageBox.information(
+                    self, "Video no encontrado",
+                    f"El video asociado a esta configuración ({video['archivo']}) no está "
+                    "junto al archivo. Ábrelo con «Abrir video…».")
 
     def closeEvent(self, e) -> None:  # noqa: N802
         self.reproductor.cerrar()

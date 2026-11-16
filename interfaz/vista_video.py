@@ -12,10 +12,12 @@ from __future__ import annotations
 import cv2
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPen
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
-from .canales import Canal
+from src.canales import Canal
+
+from .canales import caja, color_de, fijar_rect
 
 MIN_TAM = 0.01      # tamaño mínimo de un canal (fracción del fotograma)
 RADIO_ASA = 7       # px de tolerancia para agarrar un asa
@@ -31,14 +33,14 @@ _CURSORES = {
 
 class VistaVideo(QWidget):
     rect_dibujado = Signal(float, float, float, float)
-    canal_seleccionado = Signal(int)  # id del canal, 0 = ninguno
-    canal_modificado = Signal(int)    # id del canal movido/redimensionado
+    canal_seleccionado = Signal(str)  # id del canal, "" = ninguno
+    canal_modificado = Signal(str)    # id del canal movido/redimensionado
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._imagen: QImage | None = None
         self._canales: list[Canal] = []
-        self._sel_id = 0
+        self._sel_id = ""
         self._dibujando = False
         self._p0: QPointF | None = None
         self._p1: QPointF | None = None
@@ -59,7 +61,7 @@ class VistaVideo(QWidget):
         self._canales = canales
         self.update()
 
-    def set_seleccion(self, canal_id: int) -> None:
+    def set_seleccion(self, canal_id: str) -> None:
         self._sel_id = canal_id
         self.update()
 
@@ -85,11 +87,20 @@ class VistaVideo(QWidget):
         y = min(max((p.y() - r.y()) / r.height(), 0.0), 1.0)
         return x, y
 
-    def _rect_px(self, c: Canal) -> QRectF:
+    def _a_px(self, x: float, y: float) -> QPointF:
         a = self._rect_imagen()
-        x, y, w, h = c.rect
+        return QPointF(a.x() + x * a.width(), a.y() + y * a.height())
+
+    def _rect_px(self, c: Canal) -> QRectF:
+        """Caja envolvente del canal en píxeles del widget (para asas y selección)."""
+        a = self._rect_imagen()
+        x, y, w, h = caja(c)
         return QRectF(a.x() + x * a.width(), a.y() + y * a.height(),
                       w * a.width(), h * a.height())
+
+    def _color(self, c: Canal) -> QColor:
+        """Color por posición del canal en la lista."""
+        return QColor(color_de(self._canales.index(c)))
 
     @staticmethod
     def _asas(r: QRectF) -> dict[str, QPointF]:
@@ -101,7 +112,7 @@ class VistaVideo(QWidget):
             "l": QPointF(r.left(), cy),
         }
 
-    def _canal_por_id(self, canal_id: int) -> Canal | None:
+    def _canal_por_id(self, canal_id: str) -> Canal | None:
         return next((c for c in self._canales if c.id == canal_id), None)
 
     def _buscar(self, pos: QPointF) -> tuple[Canal | None, str]:
@@ -128,21 +139,30 @@ class VistaVideo(QWidget):
 
         for c in self._canales:
             r = self._rect_px(c)
-            color = QColor(c.color)
+            poligono = QPolygonF([self._a_px(x, y) for x, y in c.poligono])
+            color = self._color(c)
             if c.seleccionado:
                 relleno = QColor(color)
                 relleno.setAlpha(40)
-                p.fillRect(r, relleno)
+                p.setBrush(relleno)
                 p.setPen(QPen(color, 3 if c.id == self._sel_id else 2))
             else:
                 color.setAlpha(150)
+                p.setBrush(Qt.NoBrush)
                 p.setPen(QPen(color, 2, Qt.DashLine))
-            p.drawRect(r)
-            p.drawText(r.topLeft() + QPointF(4, 14), f"{c.id}: {c.nombre}")
+            p.drawPolygon(poligono)
+            p.setBrush(Qt.NoBrush)
+            # línea de conteo
+            if c.seleccionado:
+                (x1, y1), (x2, y2) = c.linea
+                p.setPen(QPen(QColor("#f1c40f"), 2))
+                p.drawLine(self._a_px(x1, y1), self._a_px(x2, y2))
+            p.setPen(color)
+            p.drawText(r.topLeft() + QPointF(4, 14), c.nombre)
 
         sel = self._canal_por_id(self._sel_id)
         if sel is not None and not self._dibujando:
-            p.setPen(QPen(QColor(sel.color), 1))
+            p.setPen(QPen(self._color(sel), 1))
             p.setBrush(Qt.white)
             for pt in self._asas(self._rect_px(sel)).values():
                 p.drawRect(QRectF(pt.x() - 4, pt.y() - 4, 8, 8))
@@ -162,14 +182,14 @@ class VistaVideo(QWidget):
         canal, modo = self._buscar(e.position())
         if canal is None:
             if self._sel_id:
-                self._sel_id = 0
-                self.canal_seleccionado.emit(0)
+                self._sel_id = ""
+                self.canal_seleccionado.emit("")
                 self.update()
             return
         if canal.id != self._sel_id:
             self._sel_id = canal.id
             self.canal_seleccionado.emit(canal.id)
-        self._accion = (modo, canal, canal.rect, self._a_normalizado(e.position()))
+        self._accion = (modo, canal, caja(canal), self._a_normalizado(e.position()))
         self.update()
 
     def mouseMoveEvent(self, e) -> None:  # noqa: N802
@@ -203,7 +223,7 @@ class VistaVideo(QWidget):
                 h = y0 + h0 - y
             if "b" in modo:
                 h = min(max(h0 + dy, MIN_TAM), 1.0 - y0)
-        canal.rect = (x, y, w, h)
+        fijar_rect(canal, (x, y, w, h))
         self.canal_modificado.emit(canal.id)
         self.update()
 
