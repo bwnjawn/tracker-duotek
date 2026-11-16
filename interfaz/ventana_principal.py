@@ -1,0 +1,317 @@
+"""Ventana principal: carga/reproducción de video + selección de canales."""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPixmap
+from PySide6.QtWidgets import (
+    QApplication, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QSlider,
+    QSpinBox, QVBoxLayout, QWidget,
+)
+
+from .canales import Canal, ConfigCanales
+from .reproductor import Reproductor
+from .vista_video import VistaVideo
+
+
+def _tiempo(seg: float) -> str:
+    m, s = divmod(int(seg), 60)
+    return f"{m:02d}:{s:02d}"
+
+
+class VentanaPrincipal(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("Tracker – Contador de peces")
+        self.resize(1100, 650)
+
+        self.reproductor = Reproductor(self)
+        self.config = ConfigCanales()
+        self.vista = VistaVideo()
+        self._sincronizando = False
+
+        # --- controles de reproducción
+        self.btn_abrir = QPushButton("Abrir video…")
+        self.btn_atras = QPushButton("⏮ -1")
+        self.btn_play = QPushButton("▶ Reproducir")
+        self.btn_adelante = QPushButton("+1 ⏭")
+        self.barra = QSlider(Qt.Horizontal)
+        self.barra.setEnabled(False)
+        self.lbl_info = QLabel("Sin video")
+        for b in (self.btn_atras, self.btn_play, self.btn_adelante):
+            b.setEnabled(False)
+
+        controles = QHBoxLayout()
+        controles.addWidget(self.btn_abrir)
+        controles.addStretch()
+        controles.addWidget(self.btn_atras)
+        controles.addWidget(self.btn_play)
+        controles.addWidget(self.btn_adelante)
+        controles.addStretch()
+
+        izq = QVBoxLayout()
+        izq.addWidget(self.vista, 1)
+        izq.addWidget(self.barra)
+        izq.addWidget(self.lbl_info)
+        izq.addLayout(controles)
+
+        # --- panel de canales
+        self.lista = QListWidget()
+        self.btn_dibujar = QPushButton("Marcar canal (dibujar)")
+        self.btn_dibujar.setCheckable(True)
+        self.btn_quitar = QPushButton("Eliminar canal")
+        self.btn_guardar = QPushButton("Guardar configuración…")
+        self.btn_cargar = QPushButton("Cargar configuración…")
+
+        ayuda = QLabel("Con «Marcar canal» desactivado: arrastra un canal para moverlo "
+                       "o sus asas para cambiar ancho y alto.")
+        ayuda.setWordWrap(True)
+
+        self.spin = {n: QSpinBox() for n in ("x", "y", "ancho", "alto")}
+        self.caja = QGroupBox("Canal seleccionado (px)")
+        form = QFormLayout(self.caja)
+        for n, etiqueta in (("x", "X"), ("y", "Y"), ("ancho", "Ancho"), ("alto", "Alto")):
+            self.spin[n].setKeyboardTracking(False)  # aplica al pulsar Enter / salir del campo
+            self.spin[n].valueChanged.connect(self._on_spin)
+            form.addRow(etiqueta, self.spin[n])
+        self.caja.setEnabled(False)
+
+        der = QVBoxLayout()
+        der.addWidget(QLabel("Canales a contar:"))
+        der.addWidget(self.lista, 1)
+        der.addWidget(self.caja)
+        der.addWidget(ayuda)
+        der.addWidget(self.btn_dibujar)
+        der.addWidget(self.btn_quitar)
+        der.addWidget(self.btn_guardar)
+        der.addWidget(self.btn_cargar)
+        panel = QWidget()
+        panel.setLayout(der)
+        panel.setFixedWidth(280)
+
+        raiz = QHBoxLayout()
+        raiz.addLayout(izq, 1)
+        raiz.addWidget(panel)
+        central = QWidget()
+        central.setLayout(raiz)
+        self.setCentralWidget(central)
+
+        # --- atajos
+        accion = QAction(self)
+        accion.setShortcut(QKeySequence(Qt.Key_Space))
+        accion.triggered.connect(self.reproductor.alternar)
+        self.addAction(accion)
+
+        # --- conexiones
+        self.btn_abrir.clicked.connect(self.abrir_video)
+        self.btn_play.clicked.connect(self.reproductor.alternar)
+        self.btn_atras.clicked.connect(lambda: self.reproductor.paso(-1))
+        self.btn_adelante.clicked.connect(lambda: self.reproductor.paso(1))
+        self.barra.valueChanged.connect(self.reproductor.ir_a)
+        self.reproductor.fotograma_cambiado.connect(self._on_fotograma)
+        self.reproductor.estado_cambiado.connect(self._on_estado)
+        self.reproductor.video_abierto.connect(self._on_video_abierto)
+
+        self.btn_dibujar.toggled.connect(self.vista.set_modo_dibujo)
+        self.vista.rect_dibujado.connect(self._agregar_canal)
+        self.vista.canal_seleccionado.connect(self._on_vista_seleccion)
+        self.vista.canal_modificado.connect(self._on_canal_modificado)
+        self.lista.currentItemChanged.connect(self._on_lista_actual)
+        self.lista.itemChanged.connect(self._on_item_cambiado)
+        self.btn_quitar.clicked.connect(self._quitar_canal)
+        self.btn_guardar.clicked.connect(self.guardar_config)
+        self.btn_cargar.clicked.connect(self.cargar_config)
+
+    # ------------------------------------------------------------------ video
+    def abrir_video(self, _checked: bool = False, ruta: str | None = None) -> None:
+        if not ruta:
+            ruta, _ = QFileDialog.getOpenFileName(
+                self, "Abrir video", "", "Videos (*.mp4 *.avi *.mov *.mkv);;Todos (*)"
+            )
+        if not ruta:
+            return
+        if not self.reproductor.abrir(ruta):
+            QMessageBox.warning(self, "Error", f"No se pudo abrir el video:\n{ruta}")
+
+    def _on_video_abierto(self, ruta: str) -> None:
+        r = self.reproductor
+        self.barra.blockSignals(True)
+        self.barra.setRange(0, r.total - 1)
+        self.barra.blockSignals(False)
+        self.barra.setEnabled(True)
+        for b in (self.btn_atras, self.btn_play, self.btn_adelante):
+            b.setEnabled(True)
+        self.config.video, self.config.ancho, self.config.alto = ruta, r.ancho, r.alto
+        self.setWindowTitle(f"Tracker – {Path(ruta).name}")
+        self._sync_spin()
+
+    def _on_fotograma(self, indice: int, frame) -> None:
+        self.vista.mostrar_fotograma(frame)
+        self.barra.blockSignals(True)
+        self.barra.setValue(indice)
+        self.barra.blockSignals(False)
+        r = self.reproductor
+        self.lbl_info.setText(
+            f"Fotograma {indice + 1} / {r.total}   ·   "
+            f"{_tiempo(indice / r.fps)} / {_tiempo(r.total / r.fps)}   ·   {r.fps:.1f} fps"
+        )
+
+    def _on_estado(self, reproduciendo: bool) -> None:
+        self.btn_play.setText("⏸ Pausar" if reproduciendo else "▶ Reproducir")
+
+    # --------------------------------------------------------------- canales
+    def _canal_sel(self) -> Canal | None:
+        it = self.lista.currentItem()
+        if it is None:
+            return None
+        cid = it.data(Qt.UserRole)
+        return next((c for c in self.config.canales if c.id == cid), None)
+
+    def _dims(self) -> tuple[int, int]:
+        r = self.reproductor
+        return (r.ancho, r.alto) if r.abierto else (self.config.ancho, self.config.alto)
+
+    def _refrescar_lista(self, seleccionar: int | None = None) -> None:
+        """Reconstruye la lista. `seleccionar`: id a dejar seleccionado (0 = ninguno);
+        si es None se conserva la selección actual."""
+        if seleccionar is None:
+            actual = self._canal_sel()
+            seleccionar = actual.id if actual else 0
+        self.lista.blockSignals(True)
+        self.lista.clear()
+        fila = -1
+        for i, c in enumerate(self.config.canales):
+            it = QListWidgetItem(f"{c.id}: {c.nombre}")
+            pm = QPixmap(14, 14)
+            pm.fill(QColor(c.color))
+            it.setIcon(QIcon(pm))
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if c.seleccionado else Qt.Unchecked)
+            it.setData(Qt.UserRole, c.id)
+            self.lista.addItem(it)
+            if c.id == seleccionar:
+                fila = i
+        self.lista.setCurrentRow(fila)
+        self.lista.blockSignals(False)
+        self.vista.set_canales(self.config.canales)
+        self.vista.set_seleccion(seleccionar if fila >= 0 else 0)
+        self._sync_spin()
+
+    def _agregar_canal(self, x: float, y: float, w: float, h: float) -> None:
+        n = self.config.siguiente_id()
+        self.config.canales.append(Canal(n, f"Tubo {n}", (x, y, w, h)))
+        self._refrescar_lista(seleccionar=n)
+
+    def _quitar_canal(self) -> None:
+        c = self._canal_sel()
+        if c is None:
+            return
+        self.config.canales = [k for k in self.config.canales if k.id != c.id]
+        self._refrescar_lista(seleccionar=0)
+
+    def _on_item_cambiado(self, it: QListWidgetItem) -> None:
+        cid = it.data(Qt.UserRole)
+        for c in self.config.canales:
+            if c.id == cid:
+                c.seleccionado = it.checkState() == Qt.Checked
+        self.vista.set_canales(self.config.canales)
+
+    # selección sincronizada lista <-> video
+    def _on_lista_actual(self, actual: QListWidgetItem | None, _previo=None) -> None:
+        self.vista.set_seleccion(actual.data(Qt.UserRole) if actual else 0)
+        self._sync_spin()
+
+    def _on_vista_seleccion(self, canal_id: int) -> None:
+        fila = next(
+            (i for i in range(self.lista.count())
+             if self.lista.item(i).data(Qt.UserRole) == canal_id), -1)
+        self.lista.blockSignals(True)
+        self.lista.setCurrentRow(fila)
+        self.lista.blockSignals(False)
+        self._sync_spin()
+
+    def _on_canal_modificado(self, canal_id: int) -> None:
+        c = self._canal_sel()
+        if c is not None and c.id == canal_id:
+            self._sync_spin()
+
+    # edición numérica (px) del canal seleccionado
+    def _sync_spin(self) -> None:
+        c, (W, H) = self._canal_sel(), self._dims()
+        ok = c is not None and W > 0 and H > 0
+        self.caja.setEnabled(ok)
+        if not ok:
+            return
+        x, y, w, h = c.rect
+        self._sincronizando = True
+        for n, tope in (("x", W), ("y", H), ("ancho", W), ("alto", H)):
+            self.spin[n].setRange(0, tope)
+        self.spin["x"].setValue(round(x * W))
+        self.spin["y"].setValue(round(y * H))
+        self.spin["ancho"].setValue(round(w * W))
+        self.spin["alto"].setValue(round(h * H))
+        self._sincronizando = False
+
+    def _on_spin(self, _valor: int) -> None:
+        if self._sincronizando:
+            return
+        c, (W, H) = self._canal_sel(), self._dims()
+        if c is None or W <= 0 or H <= 0:
+            return
+        w = min(max(self.spin["ancho"].value() / W, 0.01), 1.0)
+        h = min(max(self.spin["alto"].value() / H, 0.01), 1.0)
+        x = min(max(self.spin["x"].value() / W, 0.0), 1.0 - w)
+        y = min(max(self.spin["y"].value() / H, 0.0), 1.0 - h)
+        c.rect = (x, y, w, h)
+        self.vista.set_canales(self.config.canales)
+        self._sync_spin()  # refleja si hubo que ajustar algún valor
+
+    # ----------------------------------------------------------- persistencia
+    def guardar_config(self) -> None:
+        if not self.config.canales:
+            QMessageBox.information(self, "Sin canales", "Marca al menos un canal antes de guardar.")
+            return
+        ruta, _ = QFileDialog.getSaveFileName(
+            self, "Guardar configuración", "canales.json", "JSON (*.json)"
+        )
+        if ruta:
+            try:
+                self.config.guardar(ruta)
+            except OSError as e:
+                QMessageBox.warning(self, "Error", f"No se pudo guardar:\n{e}")
+
+    def cargar_config(self, _checked: bool = False, ruta: str | None = None) -> None:
+        if not ruta:
+            ruta, _ = QFileDialog.getOpenFileName(
+                self, "Cargar configuración", "", "JSON (*.json)"
+            )
+        if not ruta:
+            return
+        try:
+            cfg = ConfigCanales.cargar(ruta)
+        except ValueError as e:
+            QMessageBox.warning(self, "Error", str(e))
+            return
+        self.config.canales = cfg.canales
+        # si no hay video abierto y el de la configuración existe, se abre solo
+        if not self.reproductor.abierto and cfg.video and Path(cfg.video).exists():
+            self.reproductor.abrir(cfg.video)
+        self._refrescar_lista(seleccionar=0)
+
+    def closeEvent(self, e) -> None:  # noqa: N802
+        self.reproductor.cerrar()
+        super().closeEvent(e)
+
+
+def main() -> None:
+    app = QApplication(sys.argv)
+    ventana = VentanaPrincipal()
+    ventana.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
