@@ -45,6 +45,11 @@ def parsear_lista(texto):
     return {int(x) for x in texto.split(",") if x.strip()}
 
 
+def salida_por_defecto(raiz):
+    """Siempre <datasets>/dataset_segmentado, para que la ruta del data.yaml sea predecible."""
+    return Path(raiz) / NOMBRE_SALIDA
+
+
 def terminar(mensaje):
     print(f"ERROR: {mensaje}", file=sys.stderr)
     sys.exit(1)

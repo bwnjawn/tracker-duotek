@@ -7,17 +7,17 @@ entre splits, que tracking coincida con YOLO y que no se haya perdido ninguna im
 import sys
 from pathlib import Path
 
-from _comun import (EXT_IMAGEN, NOMBRE_SALIDA, SPLITS, agregar_opciones_reparto,
+from _comun import (EXT_IMAGEN, SPLITS, agregar_opciones_reparto,
                     argumentos_base, localizar_dataset, numero_secuencia, parsear_lista,
-                    split_de)
+                    salida_por_defecto, split_de)
 
 p = agregar_opciones_reparto(argumentos_base("Valida la carpeta generada por el paso 3."))
-p.add_argument("--salida", help="carpeta de salida (por defecto: <dataset>/dataset_segmentado)")
+p.add_argument("--salida", help="carpeta de salida (por defecto: <datasets>/dataset_segmentado)")
 args = p.parse_args()
 
 base = localizar_dataset(args.datasets)
 val, test = parsear_lista(args.val), parsear_lista(args.test)
-salida = Path(args.salida) if args.salida else base / NOMBRE_SALIDA
+salida = Path(args.salida) if args.salida else salida_por_defecto(args.datasets)
 out_yolo, out_trk = salida / "dataset_yolo", salida / "dataset_tracking"
 if not out_yolo.is_dir():
     print(f"ERROR: no existe {out_yolo}. Ejecuta antes 03_repartir_secuencias.py.")

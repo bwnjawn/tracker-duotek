@@ -25,11 +25,11 @@ Si el dataset está en otro lugar: `--datasets RUTA`.
 ```
 python scripts/01_inspeccionar_dataset.py   # mira la estructura (solo lectura)
 python scripts/02_resumen_anotaciones.py    # tabla por secuencia y por split (solo lectura)
-python scripts/03_repartir_secuencias.py    # genera datasets/.../dataset_segmentado/
+python scripts/03_repartir_secuencias.py    # genera datasets/dataset_segmentado/
 python scripts/04_validar_reparticion.py    # audita el resultado (código de salida 1 si falla)
 ```
 
-El paso 3 deja `dataset_yolo/` (con `data.yaml`) y `dataset_tracking/`, y **copia**:
+El paso 3 deja, en `datasets/dataset_segmentado/`, `dataset_yolo/` (con `data.yaml`) y `dataset_tracking/`, y **copia**:
 el original no se toca. Si la salida ya existe pide `--limpiar` para regenerarla.
 `data.yaml` guarda la ruta absoluta, así que si mueves la carpeta repite el paso 3.
 

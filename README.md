@@ -49,6 +49,21 @@ Los pesos del modelo (`weights/exp_01.pt`) vienen en el repo.
 La primera vez que se analiza, la ventana tarda unos segundos en responder porque carga
 el modelo.
 
+## Datos y entrenamiento
+
+Los datos de Duotek no se suben al repo: van en la carpeta `datasets/` (ignorada por git).
+Con ella en la raíz del repo:
+
+```
+python scripts/03_repartir_secuencias.py                       # reparte en train / val / test
+python scripts/04_validar_reparticion.py                       # comprueba el reparto
+uv run python -m src.entrenar --config configs/exp_00_base.yaml
+```
+
+El primer comando deja el dataset en `datasets/dataset_segmentado/dataset_yolo/`, que es el
+`data.yaml` que usan los configs `exp_00_base` y `exp_04_yolo26`. Los pasos de `scripts/`,
+el reparto elegido y su justificación están en [scripts/README.md](scripts/README.md).
+
 ## Archivo de canales
 
 JSON con coordenadas normalizadas (0 a 1) respecto al video, para que no dependan de la
@@ -81,6 +96,7 @@ interfaz/    Ventana en PySide6
   ventana_principal.py, vista_video.py, reproductor.py
   hilo_analisis.py   Ejecuta el análisis en un hilo aparte
   canales.py         Traduce entre los rectángulos de la ventana y el Canal de src/
+scripts/     Preparación del dataset (reparto train/val/test y validación)
 tests/       Pruebas automáticas
 weights/     Pesos del modelo (solo exp_01.pt)
 configs/, logs/, notebooks/   Entrenamiento del Lab 15

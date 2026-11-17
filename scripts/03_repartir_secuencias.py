@@ -3,19 +3,19 @@
 Se reparte por SECUENCIA completa, nunca por frame, para que cuadros casi idénticos
 no queden a la vez en train y en test (fuga de datos).
 
-Salida (dentro de la carpeta del dataset):
+Salida (dentro de la carpeta --datasets, por defecto datasets/):
   dataset_segmentado/dataset_yolo/      images/ labels/ por split + data.yaml
   dataset_segmentado/dataset_tracking/  una subcarpeta por secuencia dentro de cada split
 """
 import shutil
 from pathlib import Path
 
-from _comun import (NOMBRE_SALIDA, SPLITS, agregar_opciones_reparto, argumentos_base,
+from _comun import (SPLITS, agregar_opciones_reparto, argumentos_base,
                     imagenes_de, localizar_dataset, numero_secuencia, parsear_lista,
-                    split_de, terminar)
+                    salida_por_defecto, split_de, terminar)
 
 p = agregar_opciones_reparto(argumentos_base("Reparte el dataset en train/val/test."))
-p.add_argument("--salida", help="carpeta de salida (por defecto: <dataset>/dataset_segmentado)")
+p.add_argument("--salida", help="carpeta de salida (por defecto: <datasets>/dataset_segmentado)")
 p.add_argument("--limpiar", action="store_true",
                help="borra la carpeta de salida si ya existe y vuelve a generarla")
 args = p.parse_args()
@@ -25,7 +25,7 @@ val, test = parsear_lista(args.val), parsear_lista(args.test)
 if val & test:
     terminar(f"secuencias en val y test a la vez: {sorted(val & test)}")
 
-salida = base / NOMBRE_SALIDA if not args.salida else Path(args.salida)
+salida = Path(args.salida) if args.salida else salida_por_defecto(args.datasets)
 out_yolo, out_trk = salida / "dataset_yolo", salida / "dataset_tracking"
 
 if salida.exists() and any(salida.iterdir()):

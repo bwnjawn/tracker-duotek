@@ -1,6 +1,6 @@
 nombre: exp_00_base
 semilla: 42
-data: RUTA/AL/data.yaml        # data.yaml YOLO del dataset de Duotek (listas train/val); completar
+data: datasets/dataset_segmentado/dataset_yolo/data.yaml   # lo genera scripts/03_repartir_secuencias.py
 modelo: yolov8n.pt             # LÍNEA BASE: mismo modelo y parámetros que exp_01 del Lab 15
 imgsz: 640
 epochs: 50
