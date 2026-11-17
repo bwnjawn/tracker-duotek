@@ -16,6 +16,7 @@ __pycache__/
 data/
 datos/
 dataset/
+datasets/
 Dataset*/
 runs/
 labelstudio/
