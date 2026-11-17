@@ -114,6 +114,16 @@ Flujo al analizar: la ventana lanza un hilo (`HiloAnalisis`), que llama a
 caen dentro de un canal seleccionado y se las entrega al `ContadorCanales`. El hilo solo
 se comunica con la ventana por señales.
 
+## Flujo de trabajo en el repo
+
+El repo es privado (los datos y pesos de Duotek son confidenciales). En el plan gratuito de
+GitHub no se puede bloquear `main`, así que la regla es un acuerdo del equipo:
+
+- Nadie hace push directo a `main`. Los cambios se suben a una rama (por ejemplo `integracion`)
+  y se fusionan a `main` con un pull request.
+- Cada pull request corre las pruebas automáticamente (GitHub Actions). No se fusiona si fallan.
+- Nunca se hace force push a `main`.
+
 ## Pruebas
 
 ```
