@@ -1,3 +1,8 @@
+> **Archivo histórico.** Esta carpeta guarda el código, los configs, los resultados y el notebook del Lab 15
+> (otro dataset), que ya no se usan en el Tracker. Los comandos se ejecutan desde la raíz del repo
+> como `python -m lab15.train ...`. El notebook de Colab aún llama a la ruta antigua (`src.count`).
+> Para entrenar con los datos de Duotek se usa `src/entrenar.py` (ver el README principal).
+
 # Contador automatizado de salmones
 
 Proyecto final del Lab 15 de Inteligencia Artificial (USS-ICIFH001).
@@ -91,7 +96,7 @@ Las variables de PowerShell se pierden al abrir una ventana nueva: hay que defin
 ### Verificación de datos
 
 ```bash
-uv run python -m src.check_entorno
+uv run python -m lab15.check_entorno
 ```
 
 Extrae el zip, cuenta cuadros y etiquetas por secuencia, genera las listas y compara con los valores esperados: 1.316 cuadros, 1.019 etiquetas y listas de 1.010 (entrenamiento), 193 (validación) y 46 (prueba). Termina con `RESULTADO: OK` o `RESULTADO: REVISAR`.
@@ -126,16 +131,16 @@ uv lock --check
 
 ```bash
 # 1. Verificar datos
-uv run python -m src.check_entorno
+uv run python -m lab15.check_entorno
 
 # 2. Entrenar (configuración y semilla fijas en el config)
-uv run python -m src.train --config configs/exp_01.yaml
+uv run python -m lab15.train --config lab15/configs/exp_01.yaml
 
 # 3. Evaluar los pesos entregados sobre la prueba (mAP presentado)
-uv run python -m src.evaluate --pesos weights/exp_01.pt --split test
+uv run python -m lab15.evaluate --pesos weights/exp_01.pt --split test
 
 # 4. Contar en un video nuevo: video anotado y conteo
-uv run python -m src.count --pesos weights/exp_01.pt --fuente ruta/al/video.mp4 --salida resultados/nuevo
+uv run python -m lab15.count --pesos weights/exp_01.pt --fuente ruta/al/video.mp4 --salida resultados/nuevo
 ```
 
 - Entrenar con `exp_01` reemplaza `weights/exp_01.pt`. Para reproducir los resultados sin reentrenar, use los pesos entregados con los pasos 3 y 4.
@@ -144,7 +149,7 @@ uv run python -m src.count --pesos weights/exp_01.pt --fuente ruta/al/video.mp4 
 
 ### Prueba rápida de una época
 
-Sirve para verificar que la instalación y el entrenamiento funcionan sin tocar los pesos entregados. Copie `configs/exp_01.yaml` a `configs/prueba.yaml` y cambie estas dos líneas:
+Sirve para verificar que la instalación y el entrenamiento funcionan sin tocar los pesos entregados. Copie `lab15/configs/exp_01.yaml` a `configs/prueba.yaml` y cambie estas dos líneas:
 
 ```yaml
 nombre: prueba
@@ -154,13 +159,13 @@ epochs: 1
 Luego ejecute:
 
 ```bash
-uv run python -m src.train --config configs/prueba.yaml
+uv run python -m lab15.train --config configs/prueba.yaml
 ```
 
 ### Validación cruzada
 
 ```bash
-uv run python -m src.cv --config configs/exp_01.yaml
+uv run python -m lab15.cv --config lab15/configs/exp_01.yaml
 ```
 
 Entrena 5 folds (secuencias de validación 1, 2, 3, 5 y 6), ~16 min por fold con GPU. Omite los folds que ya existen y guarda el resumen en `logs/cv/exp_01_resumen.json`.
@@ -233,7 +238,7 @@ Todas usan la misma división, semilla 42 y 50 épocas como máximo.
 | mAP@0,5:0,95 | 0,538 | — | — |
 | Precisión / Recall | 0,933 / 0,832 | — | — |
 
-Reproducir con `uv run python -m src.evaluate --pesos weights/exp_01.pt --split test`. El resultado queda en `logs/exp_01_test.json`.
+Reproducir con `uv run python -m lab15.evaluate --pesos weights/exp_01.pt --split test`. El resultado queda en `logs/exp_01_test.json`.
 
 ### Conteo (seq_0004)
 

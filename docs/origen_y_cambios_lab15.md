@@ -32,8 +32,10 @@ Resultados del lab que sirven de referencia (otro dataset: 6 secuencias, 1.316 c
 | `configs/exp_01.yaml` | `configs/exp_00_base.yaml` | Todos los hiperparámetros | Se reemplazó la ruta de Colab por la clave `data` |
 | `configs/exp_01.yaml` | `configs/exp_04_yolo26.yaml` | Todos los hiperparámetros | Único cambio respecto a la base: `modelo: yolo26n.pt` |
 
-Archivos del lab que se mantienen sin cambios por ahora: `src/prepare_data.py`, `src/cv.py`,
-`src/check_entorno.py` (dependen del formato del dataset de Duotek, aún por definir).
+Archivos del lab que se mantienen sin cambios, ahora en `lab15/`: `prepare_data.py`, `train.py`,
+`evaluate.py`, `cv.py`, `check_entorno.py` y `count.py` (dependen del dataset del lab y de las variables
+`SALMONES_*`; no sirven con el dataset de Duotek). Sus resultados (`logs/`, `resultados/`), los configs
+`exp_01` a `exp_03` y el notebook de Colab también están en `lab15/`.
 
 ## 3. Decisiones de diseño y su fundamento
 

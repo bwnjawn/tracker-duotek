@@ -1,10 +1,10 @@
 """Verifica el entorno y el dataset antes de entrenar.
 
 Uso (desde la carpeta del repo):
-    uv run python -m src.check_entorno
+    uv run python -m lab15.check_entorno
 """
 
-from src.prepare_data import (
+from lab15.prepare_data import (
     SEQ_TEST,
     SEQ_TRAIN,
     SEQ_VAL,

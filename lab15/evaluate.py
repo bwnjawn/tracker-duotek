@@ -1,8 +1,8 @@
 """Evalúa un modelo guardado en validación o en prueba.
 
 Uso (desde la carpeta del repo):
-    uv run python -m src.evaluate --pesos weights/exp_01.pt --split val
-    uv run python -m src.evaluate --pesos weights/exp_01.pt --split test   # solo una vez, al final
+    uv run python -m lab15.evaluate --pesos weights/exp_01.pt --split val
+    uv run python -m lab15.evaluate --pesos weights/exp_01.pt --split test   # solo una vez, al final
 """
 
 import argparse
@@ -11,9 +11,10 @@ from pathlib import Path
 
 from ultralytics import YOLO
 
-from src.prepare_data import SEQ_TEST, SEQ_TRAIN, SEQ_VAL, extraer, preparar_listas
+from lab15.prepare_data import SEQ_TEST, SEQ_TRAIN, SEQ_VAL, extraer, preparar_listas
 
 RAIZ_REPO = Path(__file__).resolve().parents[1]
+CARPETA_LAB = Path(__file__).resolve().parent
 
 
 def main():
@@ -40,7 +41,7 @@ def main():
         "recall": round(float(m.box.mr), 4),
     }
 
-    salida = RAIZ_REPO / "logs" / f"{Path(args.pesos).stem}_{args.split}.json"
+    salida = CARPETA_LAB / "logs" / f"{Path(args.pesos).stem}_{args.split}.json"
     salida.parent.mkdir(exist_ok=True)
     with open(salida, "w", encoding="utf-8") as f:
         json.dump(resultado, f, indent=2, ensure_ascii=False)

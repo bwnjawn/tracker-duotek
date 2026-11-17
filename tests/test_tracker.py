@@ -189,3 +189,26 @@ def test_pipeline_completo_con_detector_falso(tmp_path):
     assert (tmp_path / "out" / "anotado.mp4").exists()
     datos = json.loads((tmp_path / "out" / "resultados.json").read_text())
     assert datos["total"] == 1 and [c["id"] for c in datos["canales"]] == ["a", "b"]
+
+
+def test_max_cuadros_detiene_antes_de_cruzar(tmp_path):
+    """Con max_cuadros=3 el pez aún no cruza la línea (lo hace hacia el cuadro 5)."""
+    np = pytest.importorskip("numpy")
+    cv2 = pytest.importorskip("cv2")
+    from src.contar_video import ejecutar
+    from src.detector import Deteccion
+
+    video = tmp_path / "v.mp4"
+    w = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"mp4v"), 10, (200, 200))
+    for _ in range(10):
+        w.write(np.zeros((200, 200, 3), dtype=np.uint8))
+    w.release()
+
+    class DetectorFalso:
+        def procesar(self, frame, cuadro):
+            y = 20 + cuadro * 17
+            return [Deteccion(cuadro, 7, 30, y - 5, 50, y + 5, 0.9, 200, 200)]
+
+    res = ejecutar(DetectorFalso(), str(video), [TUBO_A, TUBO_B], tmp_path / "out",
+                   anotar=False, max_cuadros=3)
+    assert res["conteos"] == {"a": 0, "b": 0}
