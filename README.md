@@ -51,7 +51,7 @@ el modelo.
 
 ## Datos y entrenamiento
 
-Los datos de Duotek no se suben al repo. Descomprime el dataset en una carpeta `datasets/`
+Los datos de Duotek no se suben al repo. Descomprime el dataset en una carpeta `dataset/`
 en la raíz del repo (git la ignora). Debe llamarse así; si usas otro nombre, pasa
 `--datasets RUTA` a los scripts. Después:
 
@@ -61,7 +61,7 @@ python scripts/04_validar_reparticion.py                       # comprueba el re
 uv run python -m src.entrenar --config configs/exp_00_base.yaml
 ```
 
-El primer comando deja el dataset en `datasets/dataset_segmentado/dataset_yolo/`, que es el
+El primer comando deja el dataset en `dataset/dataset_segmentado/dataset_yolo/`, que es el
 `data.yaml` que usan los configs `exp_00_base` y `exp_04_yolo26`. Los pasos de `scripts/`,
 el reparto elegido y su justificación están en [scripts/README.md](scripts/README.md).
 

@@ -13,6 +13,12 @@ __pycache__/
 *.mkv
 *.tar
 *.zip
+*.jpg
+*.jpeg
+*.png
+*.bmp
+project-*.json
+dataset_segmentado/
 data/
 datos/
 dataset/

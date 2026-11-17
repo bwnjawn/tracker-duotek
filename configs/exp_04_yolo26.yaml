@@ -1,6 +1,6 @@
 nombre: exp_04_yolo26
 semilla: 42
-data: datasets/dataset_segmentado/dataset_yolo/data.yaml   # lo genera scripts/03_repartir_secuencias.py
+data: dataset/dataset_segmentado/dataset_yolo/data.yaml   # lo genera scripts/03_repartir_secuencias.py
 modelo: yolo26n.pt             # único cambio respecto a exp_00_base (yolov8n.pt)
 imgsz: 640
 epochs: 50

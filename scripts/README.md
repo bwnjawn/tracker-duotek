@@ -1,14 +1,14 @@
 # Scripts del dataset
 
-Preparan el dataset de salmones (train / val / test) a partir de la carpeta `datasets/`.
+Preparan el dataset de salmones (train / val / test) a partir de la carpeta `dataset/`.
 Solo usan la librería estándar de Python (no hay que instalar nada).
 
 ## Qué necesitas
 
-La carpeta `datasets/` en la raíz del repo (está en `.gitignore`: nunca se sube) con:
+La carpeta `dataset/` en la raíz del repo (está en `.gitignore`: nunca se sube) con:
 
 ```
-datasets/
+dataset/
   ... /images/    seq_XXXXX_Final/*.jpeg
   ... /labels/    seq_XXXXX_Final/*.txt
   ... /tracking/  seq_XXXXX_Final/{frames.txt, gt/gt.txt, seqinfo.ini}
@@ -17,7 +17,7 @@ datasets/
 ```
 
 Los scripts buscan solos dónde están `images/`, `labels/` y `tracking/` dentro de
-`datasets/`, así que no importa cuántas carpetas intermedias haya.
+`dataset/`, así que no importa cuántas carpetas intermedias haya.
 Si el dataset está en otro lugar: `--datasets RUTA`.
 
 ## Orden de ejecución (desde la raíz del repo)
@@ -25,11 +25,11 @@ Si el dataset está en otro lugar: `--datasets RUTA`.
 ```
 python scripts/01_inspeccionar_dataset.py   # mira la estructura (solo lectura)
 python scripts/02_resumen_anotaciones.py    # tabla por secuencia y por split (solo lectura)
-python scripts/03_repartir_secuencias.py    # genera datasets/dataset_segmentado/
+python scripts/03_repartir_secuencias.py    # genera dataset/dataset_segmentado/
 python scripts/04_validar_reparticion.py    # audita el resultado (código de salida 1 si falla)
 ```
 
-El paso 3 deja, en `datasets/dataset_segmentado/`, `dataset_yolo/` (con `data.yaml`) y `dataset_tracking/`, y **copia**:
+El paso 3 deja, en `dataset/dataset_segmentado/`, `dataset_yolo/` (con `data.yaml`) y `dataset_tracking/`, y **copia**:
 el original no se toca. Si la salida ya existe pide `--limpiar` para regenerarla.
 `data.yaml` guarda la ruta absoluta, así que si mueves la carpeta repite el paso 3.
 

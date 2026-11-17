@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 RAIZ_REPO = Path(__file__).resolve().parent.parent
-DATASETS_POR_DEFECTO = RAIZ_REPO / "datasets"
+DATASETS_POR_DEFECTO = RAIZ_REPO / "dataset"
 NOMBRE_SALIDA = "dataset_segmentado"
 
 SPLITS = ("train", "val", "test")
