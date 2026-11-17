@@ -43,6 +43,23 @@ Se reparte por secuencia completa (nunca por frame) para evitar fuga de datos:
 
 Para usar otro reparto sin editar código: `--val 1,2,3 --test 4,5` (en los pasos 2, 3 y 4, los mismos valores).
 
+## Justificación del reparto
+
+Se eligieron las secuencias para que cada split tenga cerca de 70 / 15 / 15 % de los frames y de las
+cajas, y para que las oclusiones (frames con dos peces solapados, IoU > 0,15) no queden concentradas
+en un solo split. Esta tabla se obtiene con `02_resumen_anotaciones.py`:
+
+| Etapa | Secuencias | Frames | % Frames | Cajas (salmones) | % Cajas | Frames c/oclusión | % Oclusiones |
+|---|---|---|---|---|---|---|---|
+| Train | 36 | 12.095 | 70,22 % | 6.380 | 70,33 % | 276 | 67,48 % |
+| Validación | 7 | 2.618 | 15,20 % | 1.366 | 15,06 % | 48 | 11,74 % |
+| Test | 6 | 2.511 | 14,58 % | 1.325 | 14,61 % | 85 | 20,78 % |
+| **Total** | **49** | **17.224** | **100 %** | **9.071** | **100 %** | **409** | **100 %** |
+
+Frames, cajas y oclusiones de esta tabla vienen de los JSON de Label Studio (cajas = fotogramas clave,
+frames = cuadros del video). Test concentra más oclusiones (20,78 %) que su peso en frames (14,58 %),
+a propósito: es el split más exigente para el tracker.
+
 ## Resultado esperado con el dataset actual
 
 ```
