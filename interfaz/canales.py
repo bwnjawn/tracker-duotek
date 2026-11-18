@@ -73,6 +73,68 @@ def nuevo_canal(canales: list[Canal], rect: Rect) -> Canal:
     return Canal(id=f"tubo_{n}", nombre=f"Tubo {n}", poligono=rect_a_poligono(rect))
 
 
+# -- tubos a partir de líneas verticales --------------------------------------
+# N líneas dividen el video en N+1 tubos: uno por cada tramo entre dos líneas,
+# más el tramo del borde izquierdo a la primera línea y el de la última línea al
+# borde derecho. Todos ocupan el alto completo y la línea de conteo es fija.
+Y_LINEA_CONTEO = 0.5     # fracción del alto del video (igual que en el laboratorio)
+MAX_LINEAS = 7
+SEPARACION_MIN = 0.03    # distancia mínima entre dos líneas (fracción del ancho)
+_TOLERANCIA = 1e-6
+
+
+def repartir_lineas(n: int) -> list[float]:
+    """N líneas a la misma distancia entre sí y de los bordes."""
+    return [round((i + 1) / (n + 1), 3) for i in range(n)]
+
+
+def mover_linea(lineas: list[float], indice: int, x: float) -> list[float]:
+    """Mueve una línea sin dejar que pase a su vecina ni salga del video."""
+    minimo = (lineas[indice - 1] if indice > 0 else 0.0) + SEPARACION_MIN
+    maximo = (lineas[indice + 1] if indice < len(lineas) - 1 else 1.0) - SEPARACION_MIN
+    nuevas = list(lineas)
+    nuevas[indice] = round(min(max(x, minimo), maximo), 3)
+    return nuevas
+
+
+def canales_desde_lineas(lineas: list[float], seleccion: list[bool] | None = None) -> list[Canal]:
+    """Un canal por tubo. `seleccion[i]` dice si el tubo i se analiza (por defecto, todos)."""
+    bordes = [0.0, *sorted(lineas), 1.0]
+    canales = []
+    for i in range(len(bordes) - 1):
+        x1, x2 = bordes[i], bordes[i + 1]
+        canales.append(Canal(
+            id=f"tubo_{i + 1}", nombre=f"Tubo {i + 1}",
+            poligono=[(x1, 0.0), (x2, 0.0), (x2, 1.0), (x1, 1.0)],
+            linea=((x1, Y_LINEA_CONTEO), (x2, Y_LINEA_CONTEO)),
+            seleccionado=seleccion[i] if seleccion and i < len(seleccion) else True,
+        ))
+    return canales
+
+
+def lineas_desde_canales(canales: list[Canal]) -> list[float]:
+    """Operación inversa, para cargar un archivo guardado. Si los canales no son
+    tubos de alto completo pegados uno tras otro (por ejemplo un archivo de la
+    versión anterior, con rectángulos libres), lanza ValueError."""
+    if not canales:
+        raise ValueError("El archivo no tiene tubos.")
+    ordenados = sorted(canales, key=lambda c: caja(c)[0])
+    borde = 0.0
+    lineas = []
+    for c in ordenados:
+        x, y, w, h = caja(c)
+        if not (es_rectangulo(c) and abs(y) < _TOLERANCIA and abs(h - 1) < _TOLERANCIA
+                and abs(x - borde) < _TOLERANCIA):
+            raise ValueError(
+                "Este archivo es de una versión anterior (tubos dibujados a mano) "
+                "y no se puede usar. Marca los tubos de nuevo con las líneas.")
+        borde = x + w
+        lineas.append(round(borde, 3))
+    if abs(borde - 1) >= _TOLERANCIA:
+        raise ValueError("Los tubos del archivo no cubren todo el ancho del video.")
+    return lineas[:-1]
+
+
 # -- guardar y cargar ---------------------------------------------------------
 def guardar(ruta: str | Path, canales: list[Canal], video: str, ancho: int, alto: int) -> None:
     """Guarda con el formato de Luis. Del video solo va el nombre del archivo,
