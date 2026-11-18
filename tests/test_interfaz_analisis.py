@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import cv2
 import numpy as np
 import pytest
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from interfaz.hilo_analisis import MENSAJE_ERROR_INESPERADO
@@ -81,8 +81,7 @@ def pausa(app, segundos):
 def ventana(app, video, detector):
     v = VentanaPrincipal(fabrica_detector=lambda: detector)
     v.abrir_video(ruta=video)
-    v._agregar_canal(0.0, 0.0, 1.0, 1.0)
-    return v
+    return v  # arranca con 1 línea = 2 tubos; el pez falso pasa por el tubo 1
 
 
 def test_analiza_sin_congelar_la_ventana(app, video):
@@ -97,19 +96,20 @@ def test_analiza_sin_congelar_la_ventana(app, video):
     reloj.stop()
 
     assert len(latidos) >= 10, f"la ventana se congeló: solo {len(latidos)} latidos"
-    assert v.resultado.conteos == {"tubo_1": 1}
+    assert v.resultado.conteos == {"tubo_1": 1, "tubo_2": 0}
     assert v.progreso.value() == 100 and "Total: 1" in v.lbl_resultado.text()
 
 
 def test_bloquea_la_edicion_mientras_analiza(app, video):
     v = ventana(app, video, DetectorLento())
     v.btn_analizar.click()
-    assert not v.btn_abrir.isEnabled() and not v.btn_dibujar.isEnabled()
-    assert not v.btn_quitar.isEnabled() and not v.lista.isEnabled() and not v.vista.isEnabled()
+    assert not v.btn_abrir.isEnabled() and not v.btn_agregar.isEnabled()
+    assert not v.btn_quitar_linea.isEnabled() and not v.lista.isEnabled() and not v.vista.isEnabled()
+    assert not v.btn_izq.isEnabled() and not v.caja_chips.isEnabled()
     assert v.btn_pausar.isEnabled() and v.btn_cancelar.isEnabled()
 
     esperar(app, lambda: v._hilo is None)
-    assert v.btn_abrir.isEnabled() and v.btn_dibujar.isEnabled() and v.lista.isEnabled()
+    assert v.btn_abrir.isEnabled() and v.btn_agregar.isEnabled() and v.lista.isEnabled()
     assert not v.btn_pausar.isEnabled() and not v.btn_cancelar.isEnabled()
 
 
@@ -124,7 +124,7 @@ def test_cancelar(app, video):
 
     v.btn_analizar.click()  # se puede volver a analizar sin arrastrar nada
     esperar(app, lambda: v._hilo is None)
-    assert v.resultado.conteos == {"tubo_1": 1}
+    assert v.resultado.conteos == {"tubo_1": 1, "tubo_2": 0}
 
 
 def test_pausar_y_reanudar(app, video):
@@ -140,7 +140,7 @@ def test_pausar_y_reanudar(app, video):
 
     v.btn_pausar.click()
     esperar(app, lambda: v._hilo is None)
-    assert v.resultado.conteos == {"tubo_1": 1}
+    assert v.resultado.conteos == {"tubo_1": 1, "tubo_2": 0}
 
 
 def test_sin_video_o_sin_canales_avisa(app, video, avisos):
@@ -149,6 +149,8 @@ def test_sin_video_o_sin_canales_avisa(app, video, avisos):
     assert "Abre un video" in avisos[-1] and v._hilo is None
 
     v.abrir_video(ruta=video)
+    for i in range(v.lista.count()):  # se desmarcan todos los tubos
+        v.lista.item(i).setCheckState(Qt.Unchecked)
     v.btn_analizar.click()
     assert "al menos un canal" in avisos[-1] and v._hilo is None
 
@@ -159,7 +161,7 @@ def test_falla_inesperada_no_muestra_traceback(app, video, avisos):
     esperar(app, lambda: v._hilo is None)
     assert avisos == [MENSAJE_ERROR_INESPERADO]
     assert v.resultado is None and v.btn_analizar.isEnabled()
-    assert len(v.canales) == 1  # los canales no se perdieron
+    assert len(v.canales) == 2  # los tubos no se perdieron
 
 
 def test_pesos_que_faltan_avisan_claro(app, video, avisos, monkeypatch):
@@ -168,7 +170,6 @@ def test_pesos_que_faltan_avisan_claro(app, video, avisos, monkeypatch):
     monkeypatch.setattr(vp, "PESOS_DEFECTO", vp.Path("no_existe/exp_01.pt"))
     v = VentanaPrincipal()  # fábrica real, sin pesos
     v.abrir_video(ruta=video)
-    v._agregar_canal(0.0, 0.0, 1.0, 1.0)
     v.btn_analizar.click()
     assert "archivo de pesos" in avisos[-1] and v._hilo is None
 

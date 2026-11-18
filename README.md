@@ -33,18 +33,21 @@ Los pesos del modelo (`weights/exp_01.pt`) vienen en el repo.
 1. **Abrir video…** y elegir un `.mp4`, `.avi`, `.mov` o `.mkv`. Con la barra, los
    botones `-1` y `+1` y la barra espaciadora se reproduce, se pausa y se avanza cuadro
    a cuadro.
-2. **Marcar canal (dibujar)** y arrastrar el mouse sobre el video para dibujar un tubo.
-   Con ese botón desactivado, un tubo se mueve arrastrándolo y se cambia su tamaño con
-   las asas o con las casillas X, Y, Ancho y Alto. La línea amarilla es la línea de
-   conteo: queda a mitad de la altura del tubo.
-3. En la lista de la derecha se marcan o desmarcan los canales a contar.
-4. **Guardar configuración…** y **Cargar configuración…** conservan los tubos y su
-   selección. El archivo guarda el nombre del video, no su ruta; al cargar, la aplicación
-   lo busca junto al archivo de canales.
+2. Los tubos se separan con líneas verticales: N líneas dan N+1 tubos (los bordes del
+   video cuentan). La ventana arranca con 1 línea (2 tubos). Arrastra una línea sobre el
+   video, o elígela (L1, L2…) y muévela con ◀ y ▶. **Nueva línea** y **Quitar línea**
+   reparten todas las líneas a la misma distancia. La línea amarilla es la línea de
+   conteo y está fija a mitad de la altura. Se admiten hasta 7 líneas.
+3. En la lista de la derecha se marcan o desmarcan los tubos a contar.
+4. **Guardar configuración…** y **Cargar configuración…** conservan las líneas y la
+   selección de tubos. El archivo guarda el nombre del video, no su ruta; al cargar, la
+   aplicación lo busca junto al archivo. Los archivos de la versión anterior (tubos
+   dibujados a mano) no se pueden cargar: se avisa y hay que marcar los tubos otra vez.
 5. **Analizar video** procesa el video completo en segundo plano. La barra muestra el
    avance, y se puede **Pausar**, **Reanudar** o **Cancelar**. Mientras se analiza no se
-   puede abrir otro video ni editar los canales. Al terminar se muestra el conteo de cada
-   canal y el total. Un canal sin peces muestra 0.
+   puede abrir otro video ni editar las líneas. El conteo de cada tubo sube mientras se
+   analiza. Un tubo sin peces muestra 0. Al terminar, **Exportar resultados…** guarda los
+   archivos en la carpeta que elijas.
 
 La primera vez que se analiza, la ventana tarda unos segundos en responder porque carga
 el modelo.

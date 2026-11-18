@@ -1,17 +1,16 @@
 """Ayudas para usar el Canal de Luis (src/canales.py) desde la interfaz.
 
 El modelo de canal, el guardado y la carga viven en src/canales.py y son
-la única fuente de verdad. Aquí solo hay traductores, porque la interfaz
-todavía dibuja y edita rectángulos y el Canal de Luis guarda polígonos.
-Un rectángulo se guarda como polígono de 4 puntos.
+la única fuente de verdad. Aquí solo hay traductores: la interfaz define los
+tubos con líneas verticales y el Canal de Luis guarda polígonos, así que cada
+tubo se guarda como un polígono de 4 puntos (un rectángulo de alto completo).
 """
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
-from src.canales import Canal, cargar_canales, guardar_canales, linea_por_defecto
+from src.canales import Canal, cargar_canales, guardar_canales
 
 Rect = tuple[float, float, float, float]  # (x, y, ancho, alto) normalizados
 
@@ -52,25 +51,6 @@ def es_rectangulo(canal: Canal) -> bool:
 
 def caja(canal: Canal) -> Rect:
     return poligono_a_rect(canal.poligono)
-
-
-def fijar_rect(canal: Canal, rect: Rect) -> None:
-    """Mueve el canal a `rect`. Se modifica el mismo objeto (la vista lo tiene
-    referenciado) y se recalcula la línea de conteo, que si no se quedaría
-    donde estaba."""
-    canal.poligono = rect_a_poligono(rect)
-    canal.linea = linea_por_defecto(canal.poligono)
-
-
-# -- crear canales ------------------------------------------------------------
-def _numero(canal: Canal) -> int:
-    m = re.search(r"(\d+)$", canal.id)
-    return int(m.group(1)) if m else 0
-
-
-def nuevo_canal(canales: list[Canal], rect: Rect) -> Canal:
-    n = max((_numero(c) for c in canales), default=0) + 1
-    return Canal(id=f"tubo_{n}", nombre=f"Tubo {n}", poligono=rect_a_poligono(rect))
 
 
 # -- tubos a partir de líneas verticales --------------------------------------
