@@ -19,9 +19,8 @@ import json
 from pathlib import Path
 
 from src.canales import Canal, cargar_canales
-from src.contador import ContadorCanales
-from src.detector import leer_video
 from src.exportador import exportar
+from src.servicio import ServicioConteo
 
 
 def _dibujar(frame, canales, contador, detecciones, cv2):
@@ -63,51 +62,35 @@ def ejecutar(
 
     salida = Path(salida)
     salida.mkdir(parents=True, exist_ok=True)
-    contador = ContadorCanales(canales, min_hits=min_hits)
-
-    cap = cv2.VideoCapture(str(video))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-    ancho = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    alto = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    cap.release()
-
     escritor = None
-    if anotar:
-        escritor = cv2.VideoWriter(
-            str(salida / "anotado.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), fps, (ancho, alto)
+
+    def dibujar_cuadro(frame, contador, en_canal, fps):
+        nonlocal escritor
+        if escritor is None:
+            alto, ancho = frame.shape[:2]
+            escritor = cv2.VideoWriter(
+                str(salida / "anotado.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), fps, (ancho, alto)
+            )
+        _dibujar(frame, canales, contador, en_canal, cv2)
+        escritor.write(frame)
+
+    # El recorrido del video (detectar, filtrar por canal, contar) vive en ServicioConteo,
+    # el mismo que usa la interfaz, para que ambos cuenten igual.
+    try:
+        r = ServicioConteo(detector).analizar(
+            str(video), canales, min_hits=min_hits, max_cuadros=max_cuadros,
+            por_cuadro=dibujar_cuadro if anotar else None,
         )
-
-    filas: list[dict] = []
-    for cuadro, tiempo, frame in leer_video(str(video)):
-        if max_cuadros is not None and cuadro >= max_cuadros:
-            break
-        dets = detector.procesar(frame, cuadro)
-        # Solo cuentan (y se exportan) las detecciones dentro de un canal seleccionado.
-        dets_en_canal = []
-        for d in dets:
-            canal = contador.canal_de(d.cx_n, d.cy_n)
-            if canal is None:
-                continue
-            dets_en_canal.append(d)
-            filas.append({
-                "cuadro": cuadro, "tiempo_s": round(tiempo, 3), "id": d.id, "canal": canal,
-                "x1": round(d.x1, 1), "y1": round(d.y1, 1), "x2": round(d.x2, 1),
-                "y2": round(d.y2, 1), "conf": round(d.conf, 3),
-            })
-        contador.actualizar(cuadro, tiempo, [(d.id, d.cx_n, d.cy_n) for d in dets_en_canal])
+    finally:
         if escritor is not None:
-            _dibujar(frame, canales, contador, dets_en_canal, cv2)
-            escritor.write(frame)
-
-    if escritor is not None:
-        escritor.release()
+            escritor.release()
 
     ruta = exportar(
-        salida, str(video), fps, ancho, alto, canales, contador.conteos,
-        contador.eventos, filas, modelo=modelo,
+        salida, str(video), r.fps, r.ancho, r.alto, canales, r.conteos,
+        r.eventos, r.filas, modelo=modelo,
         parametros={**(parametros or {}), "min_hits": min_hits},
     )
-    return {"resultados": str(ruta), "conteos": contador.conteos, "total": contador.total}
+    return {"resultados": str(ruta), "conteos": r.conteos, "total": r.total}
 
 
 def main() -> None:

@@ -1,7 +1,7 @@
 """Validación cruzada por secuencia: un entrenamiento por fold.
 
 Uso:
-    python -m src.cv --config configs/exp_01.yaml
+    python -m lab15.cv --config lab15/configs/exp_01.yaml
 
 Si se corta, vuelve a ejecutar el mismo comando: los folds terminados se saltan.
 """
@@ -16,6 +16,7 @@ import numpy as np
 import yaml
 
 RAIZ_REPO = Path(__file__).resolve().parents[1]
+CARPETA_LAB = Path(__file__).resolve().parent
 FOLDS = [1, 2, 3, 5, 6]
 METRICAS = ["val_mAP50", "val_mAP50_95", "val_precision", "val_recall"]
 
@@ -27,7 +28,7 @@ def main():
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
-    carpeta_logs = RAIZ_REPO / "logs" / "cv"
+    carpeta_logs = CARPETA_LAB / "logs" / "cv"
     carpeta_logs.mkdir(parents=True, exist_ok=True)
 
     resultados = []
@@ -38,7 +39,7 @@ def main():
                 [
                     sys.executable,
                     "-m",
-                    "src.train",
+                    "lab15.train",
                     "--config",
                     args.config,
                     "--fold",

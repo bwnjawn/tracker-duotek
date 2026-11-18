@@ -49,6 +49,25 @@ Los pesos del modelo (`weights/exp_01.pt`) vienen en el repo.
 La primera vez que se analiza, la ventana tarda unos segundos en responder porque carga
 el modelo.
 
+## Datos y entrenamiento
+
+Los datos de Duotek no se suben al repo. Descomprime el dataset en una carpeta `dataset/`
+en la raíz del repo (git la ignora). Debe llamarse así; si usas otro nombre, pasa
+`--datasets RUTA` a los scripts. Después:
+
+```
+python scripts/03_repartir_secuencias.py                       # reparte en train / val / test
+python scripts/04_validar_reparticion.py                       # comprueba el reparto
+uv run python -m src.entrenar --config configs/exp_00_base.yaml
+```
+
+El primer comando deja el dataset en `dataset/dataset_segmentado/dataset_yolo/`, que es el
+`data.yaml` que usan los configs `exp_00_base` y `exp_04_yolo26`. Los pasos de `scripts/`,
+el reparto elegido y su justificación están en [scripts/README.md](scripts/README.md).
+
+Al entrenar, los pesos quedan en `weights/<nombre>.pt`, las métricas en `logs/` y las corridas
+completas en `runs/` (esta última no se sube a git).
+
 ## Archivo de canales
 
 JSON con coordenadas normalizadas (0 a 1) respecto al video, para que no dependan de la
@@ -77,20 +96,33 @@ src/         Módulos de IA y lógica
   contador.py    Un contador por canal; un id suma una vez al cruzar la línea
   servicio.py    Analiza un video completo con progreso, pausa y cancelación
   contar_video.py, exportador.py, eval_conteo.py, entrenar.py   Otras herramientas
+                     (entrenar.py entrena con un data.yaml cualquiera)
 interfaz/    Ventana en PySide6 
   ventana_principal.py, vista_video.py, reproductor.py
   hilo_analisis.py   Ejecuta el análisis en un hilo aparte
   canales.py         Traduce entre los rectángulos de la ventana y el Canal de src/
+scripts/     Preparación del dataset (reparto train/val/test y validación)
 tests/       Pruebas automáticas
 weights/     Pesos del modelo (solo exp_01.pt)
-configs/, logs/, notebooks/   Entrenamiento del Lab 15
-docs/        Documentación del Lab 15
+configs/     Configs de entrenamiento para los datos de Duotek
+lab15/       Código, configs, logs y notebook del Lab 15 (histórico, no se usa)
+docs/        Origen y cambios del código reutilizado del Lab 15
 ```
 
 Flujo al analizar: la ventana lanza un hilo (`HiloAnalisis`), que llama a
 `ServicioConteo`. El servicio pasa cada cuadro al `Detector`, filtra las detecciones que
 caen dentro de un canal seleccionado y se las entrega al `ContadorCanales`. El hilo solo
 se comunica con la ventana por señales.
+
+## Flujo de trabajo en el repo
+
+El repo es privado (los datos y pesos de Duotek son confidenciales). En el plan gratuito de
+GitHub no se puede bloquear `main`, así que la regla es un acuerdo del equipo:
+
+- Nadie hace push directo a `main`. Los cambios se suben a una rama (por ejemplo `integracion`)
+  y se fusionan a `main` con un pull request.
+- Cada pull request corre las pruebas automáticamente (GitHub Actions). No se fusiona si fallan.
+- Nunca se hace force push a `main`.
 
 ## Pruebas
 

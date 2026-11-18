@@ -64,6 +64,12 @@ class ServicioConteo:
         self._cancelar.set()
         self._continuar.set()  # si estaba en pausa, que despierte y se detenga
 
+    def _reiniciar_detector(self) -> None:
+        # los detectores de prueba pueden no tener reiniciar()
+        reiniciar = getattr(self.detector, "reiniciar", None)
+        if reiniciar is not None:
+            reiniciar()
+
     # -- análisis ------------------------------------------------------------
     def analizar(
         self,
@@ -71,12 +77,18 @@ class ServicioConteo:
         canales: list[Canal],
         min_hits: int = 1,
         progreso: Callable[[int, int], None] | None = None,
+        por_cuadro: Callable | None = None,
+        max_cuadros: int | None = None,
     ) -> ResultadoAnalisis:
         """Procesa el video completo.
 
         `progreso(cuadros_hechos, total_cuadros)` se llama tras cada cuadro.
         Lanza ErrorAnalisis si no se puede empezar y AnalisisCancelado si
         alguien llamó a cancelar().
+
+        Opcionales: `por_cuadro(frame, contador, en_canal, fps)` se llama tras contar
+        cada cuadro (sirve para dibujar el video anotado) y `max_cuadros` detiene el
+        análisis antes de terminar el video.
         """
         import cv2
 
@@ -103,13 +115,15 @@ class ServicioConteo:
         self._cancelar.clear()
         self._continuar.set()
         contador = ContadorCanales(canales, min_hits=min_hits)
-        self.detector.reiniciar()
+        self._reiniciar_detector()
 
         detecciones: dict[int, list[Deteccion]] = {}
         filas: list[dict] = []
         cuadros = leer_video(str(video))
         try:
             for cuadro, tiempo, frame in cuadros:
+                if max_cuadros is not None and cuadro >= max_cuadros:
+                    break
                 self._continuar.wait()
                 if self._cancelar.is_set():
                     raise AnalisisCancelado()
@@ -129,11 +143,13 @@ class ServicioConteo:
                 contador.actualizar(cuadro, tiempo, [(d.id, d.cx_n, d.cy_n) for d in en_canal])
                 if en_canal:
                     detecciones[cuadro] = en_canal
+                if por_cuadro is not None:
+                    por_cuadro(frame, contador, en_canal, fps)
                 if progreso is not None:
                     progreso(cuadro + 1, total)
         finally:
             cuadros.close()  # libera el video aunque haya cancelación o error
-            self.detector.reiniciar()
+            self._reiniciar_detector()
 
         return ResultadoAnalisis(
             video=str(video), fps=fps, ancho=ancho, alto=alto, total_cuadros=total,

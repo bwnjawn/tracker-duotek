@@ -1,8 +1,8 @@
 """Entrena un experimento, o un fold de validación cruzada.
 
 Uso (desde la carpeta del repo):
-    uv run python -m src.train --config configs/exp_01.yaml
-    uv run python -m src.train --config configs/exp_01.yaml --fold 2
+    uv run python -m lab15.train --config lab15/configs/exp_01.yaml
+    uv run python -m lab15.train --config lab15/configs/exp_01.yaml --fold 2
 """
 
 import argparse
@@ -18,7 +18,7 @@ import torch
 import yaml
 from ultralytics import YOLO
 
-from src.prepare_data import (
+from lab15.prepare_data import (
     SEQ_CV,
     SEQ_TEST,
     SEQ_TRAIN,
@@ -29,6 +29,7 @@ from src.prepare_data import (
 )
 
 RAIZ_REPO = Path(__file__).resolve().parents[1]
+CARPETA_LAB = Path(__file__).resolve().parent
 
 
 def runs_dir():
@@ -121,9 +122,9 @@ def main():
     if args.fold is None:
         (RAIZ_REPO / "weights").mkdir(exist_ok=True)
         shutil.copy(best, RAIZ_REPO / "weights" / f"{nombre}.pt")
-        destino_log = RAIZ_REPO / "logs"
+        destino_log = CARPETA_LAB / "logs"
     else:
-        destino_log = RAIZ_REPO / "logs" / "cv"
+        destino_log = CARPETA_LAB / "logs" / "cv"
     destino_log.mkdir(parents=True, exist_ok=True)
     shutil.copy(carpeta / "results.csv", destino_log / f"{nombre}_epocas.csv")
     with open(destino_log / f"{nombre}.json", "w", encoding="utf-8") as f:

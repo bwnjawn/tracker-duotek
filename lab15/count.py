@@ -1,8 +1,8 @@
 """Cuenta salmones que cruzan una línea horizontal, con YOLO + ByteTrack.
 
 Uso:
-    python -m src.count --pesos weights/exp_01.pt --fuente videos/prueba.mp4 --salida resultados/video_prueba
-    python -m src.count --pesos weights/exp_01.pt --fuente /content/datos/seq_0004/images --salida resultados/seq_0004
+    python -m lab15.count --pesos weights/exp_01.pt --fuente videos/prueba.mp4 --salida resultados/video_prueba
+    python -m lab15.count --pesos weights/exp_01.pt --fuente /content/datos/seq_0004/images --salida resultados/seq_0004
 """
 
 import argparse

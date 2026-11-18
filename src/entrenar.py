@@ -12,7 +12,7 @@ Uso (desde la raíz del repo):
     uv run python -m src.entrenar --config configs/exp_04_yolo26.yaml
     uv run python -m src.entrenar --evaluar weights/exp_04_yolo26.pt --data ruta/data.yaml --split val
 
-El config usa las mismas claves que configs/exp_01.yaml, más `data`
+El config usa las mismas claves que lab15/configs/exp_01.yaml, más `data`
 (ruta al data.yaml) y, opcionalmente, `device` (por ejemplo "cpu" o "0")
 y `workers`.
 """
