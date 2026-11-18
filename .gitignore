@@ -45,3 +45,6 @@ MEMORY.md
 Thumbs.db
 .idea/
 .vscode/
+
+# recursos de la interfaz (logo)
+!interfaz/recursos/*.png

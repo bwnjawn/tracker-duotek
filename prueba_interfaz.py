@@ -32,7 +32,7 @@ assert v.lineas == [0.5] and len(v.canales) == 2
 v.btn_agregar.click(); v.btn_agregar.click()
 assert v.lineas == [0.25, 0.5, 0.75] and len(v.canales) == 4
 assert [c.id for c in v.canales] == ["tubo_1", "tubo_2", "tubo_3", "tubo_4"]   # ids de texto (formato de Luis)
-v.lista.item(1).setCheckState(Qt.Unchecked)                       # desmarca el tubo 2
+v.conteo.marcar(1, False)                                      # desmarca el tubo 2
 assert [c.seleccionado for c in v.canales] == [True, False, True, True]
 cols = [cn.color_de(i) for i in range(len(v.canales))]
 assert len(set(cols)) == len(cols), "los tubos deben tener colores distintos"
@@ -52,7 +52,7 @@ ruta = os.path.join(tmp, "canales.json"); cn.guardar(ruta, v.canales, video, 320
 v2 = VentanaPrincipal(); v2.cargar_config(ruta=ruta)  # "reabrir la app"
 assert v2.canales == v.canales and v2.lineas == v.lineas, "la configuración no quedó idéntica"
 assert v2.reproductor.abierto                          # abrió el video de la config
-assert v2.lista.count() == 4 and v2.lista.item(1).checkState() == Qt.Unchecked
+assert v2.conteo.cantidad() == 4 and not v2.conteo.incluido(1)
 try: cn.cargar(video); raise SystemExit("debió fallar")
 except ValueError: pass
 print("OK: todas las pruebas pasaron")

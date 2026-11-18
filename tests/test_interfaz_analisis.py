@@ -98,18 +98,19 @@ def test_analiza_sin_congelar_la_ventana(app, video):
     assert len(latidos) >= 10, f"la ventana se congeló: solo {len(latidos)} latidos"
     assert v.resultado.conteos == {"tubo_1": 1, "tubo_2": 0}
     assert v.progreso.value() == 100 and "Total: 1" in v.lbl_resultado.text()
+    assert v.conteo.valor(0) == "1" and v.conteo.valor(1) == "0" and v.conteo.total() == "1"
 
 
 def test_bloquea_la_edicion_mientras_analiza(app, video):
     v = ventana(app, video, DetectorLento())
     v.btn_analizar.click()
     assert not v.btn_abrir.isEnabled() and not v.btn_agregar.isEnabled()
-    assert not v.btn_quitar_linea.isEnabled() and not v.lista.isEnabled() and not v.vista.isEnabled()
+    assert not v.btn_quitar_linea.isEnabled() and not v.conteo.editable and not v.vista.isEnabled()
     assert not v.btn_izq.isEnabled() and not v.caja_chips.isEnabled()
     assert v.btn_pausar.isEnabled() and v.btn_cancelar.isEnabled()
 
     esperar(app, lambda: v._hilo is None)
-    assert v.btn_abrir.isEnabled() and v.btn_agregar.isEnabled() and v.lista.isEnabled()
+    assert v.btn_abrir.isEnabled() and v.btn_agregar.isEnabled() and v.conteo.editable
     assert not v.btn_pausar.isEnabled() and not v.btn_cancelar.isEnabled()
 
 
@@ -149,8 +150,8 @@ def test_sin_video_o_sin_canales_avisa(app, video, avisos):
     assert "Abre un video" in avisos[-1] and v._hilo is None
 
     v.abrir_video(ruta=video)
-    for i in range(v.lista.count()):  # se desmarcan todos los tubos
-        v.lista.item(i).setCheckState(Qt.Unchecked)
+    for i in range(v.conteo.cantidad()):  # se desmarcan todos los tubos
+        v.conteo.marcar(i, False)
     v.btn_analizar.click()
     assert "al menos un canal" in avisos[-1] and v._hilo is None
 
@@ -211,9 +212,10 @@ def test_cancelar_deja_el_boton_exportar_apagado(app, video):
 def test_muestra_el_conteo_mientras_analiza(app, video):
     v = ventana(app, video, DetectorLento())
     v.btn_analizar.click()
-    assert "Contando" in v.lbl_resultado.text() and "Tubo 1: 0" in v.lbl_resultado.text()
+    assert "Contando" in v.lbl_resultado.text()
+    assert v.conteo.valor(0) == "0" and v.conteo.valor(1) == "0"  # cada tubo parte en 0
 
     # el pez cruza la línea a mitad del video: el 1 aparece antes de que termine
-    esperar(app, lambda: "Contando" in v.lbl_resultado.text() and "Tubo 1: 1" in v.lbl_resultado.text())
+    esperar(app, lambda: "Contando" in v.lbl_resultado.text() and v.conteo.valor(0) == "1")
     esperar(app, lambda: v._hilo is None)
     assert "Análisis terminado" in v.lbl_resultado.text() and "Total: 1" in v.lbl_resultado.text()

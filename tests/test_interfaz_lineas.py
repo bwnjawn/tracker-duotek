@@ -43,7 +43,7 @@ def video(tmp_path):
 def test_arranca_con_una_linea_y_dos_tubos(app):
     v = VentanaPrincipal()
     assert v.lineas == [0.5] and len(v.canales) == 2
-    assert v.lista.count() == 2 and v.lbl_lineas.text() == "1 línea = 2 tubos"
+    assert v.conteo.cantidad() == 2 and v.lbl_lineas.text() == "1 línea = 2 tubos"
     assert not v.btn_quitar_linea.isEnabled()  # el mínimo es 1 línea
 
 
@@ -52,7 +52,7 @@ def test_agregar_y_quitar_reparten_por_igual(app):
     v.btn_agregar.click()
     assert v.lineas == [0.333, 0.667] and len(v.canales) == 3
     v.btn_agregar.click()
-    assert v.lineas == [0.25, 0.5, 0.75] and v.lista.count() == 4
+    assert v.lineas == [0.25, 0.5, 0.75] and v.conteo.cantidad() == 4
     assert v.lbl_lineas.text() == "3 líneas = 4 tubos"
 
     v._elegir_linea(1)
@@ -71,7 +71,7 @@ def test_el_maximo_de_lineas_apaga_el_boton(app):
 def test_los_tubos_desmarcados_siguen_desmarcados(app):
     v = VentanaPrincipal()
     v.btn_agregar.click()  # 3 tubos
-    v.lista.item(1).setCheckState(Qt.Unchecked)
+    v.conteo.marcar(1, False)
     assert [c.seleccionado for c in v.canales] == [True, False, True]
 
     v.btn_agregar.click()  # ahora 4 tubos: los anteriores conservan su marca
@@ -115,7 +115,7 @@ def test_guardar_y_cargar_deja_lo_mismo(app, video, tmp_path):
     v = VentanaPrincipal()
     v.abrir_video(ruta=video)
     v.btn_agregar.click()
-    v.lista.item(2).setCheckState(Qt.Unchecked)
+    v.conteo.marcar(2, False)
     ruta = tmp_path / "tubos.json"
     cn.guardar(ruta, v.canales, video, 320, 240)
 
@@ -123,7 +123,7 @@ def test_guardar_y_cargar_deja_lo_mismo(app, video, tmp_path):
     otra.cargar_config(ruta=str(ruta))
     assert otra.lineas == v.lineas
     assert [c.seleccionado for c in otra.canales] == [True, True, False]
-    assert otra.lista.count() == 3
+    assert otra.conteo.cantidad() == 3 and not otra.conteo.incluido(2)
 
 
 def test_un_archivo_viejo_se_rechaza_y_no_cambia_nada(app, tmp_path, avisos):

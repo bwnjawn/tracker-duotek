@@ -39,7 +39,7 @@ Los pesos del modelo (`weights/exp_01.pt`) vienen en el repo.
    reparten todas las líneas a la misma distancia. La línea amarilla es la línea de
    conteo y está fija a mitad de la altura. Se admiten hasta 7 líneas.
 3. En la lista de la derecha se marcan o desmarcan los tubos a contar.
-4. **Guardar configuración…** y **Cargar configuración…** conservan las líneas y la
+4. **Guardar config** y **Cargar config** conservan las líneas y la
    selección de tubos. El archivo guarda el nombre del video, no su ruta; al cargar, la
    aplicación lo busca junto al archivo. Los archivos de la versión anterior (tubos
    dibujados a mano) no se pueden cargar: se avisa y hay que marcar los tubos otra vez.

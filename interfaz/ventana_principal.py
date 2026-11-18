@@ -1,4 +1,5 @@
-"""Ventana principal: carga/reproducción de video + tubos definidos con líneas verticales."""
+"""Ventana principal: video a la izquierda y, a la derecha, un asistente de 4 etapas
+(Video, Líneas, Conteo, Exportar) con el conteo de cada tubo siempre a la vista."""
 from __future__ import annotations
 
 import copy
@@ -7,11 +8,10 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QColor, QIcon, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QFileDialog, QGroupBox, QHBoxLayout, QLabel,
-    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QPushButton,
-    QSlider, QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
+    QMessageBox, QProgressBar, QPushButton, QSlider, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from src.canales import Canal
@@ -19,13 +19,41 @@ from src.exportador import exportar
 from src.servicio import ErrorAnalisis, ServicioConteo
 
 from . import canales as cn
+from . import estilo, iconos
 from .hilo_analisis import HiloAnalisis
-from .reproductor import Reproductor
+from .panel_conteo import BarraEtapas, PanelConteo
+from .reproductor import VELOCIDADES, Reproductor
 from .vista_video import VistaVideo
 
 log = logging.getLogger(__name__)
 PESOS_DEFECTO = Path(__file__).resolve().parent.parent / "weights" / "exp_01.pt"
 PASO_LINEA = 0.01  # lo que mueven los botones ◀ ▶ (fracción del ancho del video)
+
+ETAPAS = ["Video", "Líneas", "Conteo", "Exportar"]
+PISTAS = [
+    "Abra la grabación de los tubos para comenzar.",
+    "Arrastre las líneas sobre el video o use los botones. Las líneas separan los tubos.",
+    "Toque un tubo para incluirlo o excluirlo del conteo. Luego inicie el análisis.",
+    "Exporte los resultados a la carpeta que elija.",
+]
+
+
+def _boton(texto: str, icono: str | None = None, rol: str | None = None) -> QPushButton:
+    """Botón con el aspecto de la hoja de estilo (rol) y su icono."""
+    b = QPushButton(texto)
+    if rol:
+        b.setProperty("rol", rol)  # antes del icono: el color del icono depende del rol
+    if icono:
+        iconos.poner_icono(b, icono)
+    return b
+
+
+def _etiqueta(texto: str, rol: str | None = None, ajustar: bool = False) -> QLabel:
+    lbl = QLabel(texto)
+    if rol:
+        lbl.setProperty("rol", rol)
+    lbl.setWordWrap(ajustar)
+    return lbl
 
 
 def _tiempo(seg: float) -> str:
@@ -49,12 +77,14 @@ class VentanaPrincipal(QMainWindow):
     def __init__(self, fabrica_detector=crear_detector_real) -> None:
         super().__init__()
         self.setWindowTitle("Tracker – Contador de peces")
-        self.resize(1100, 650)
+        self.resize(1180, 720)
+        self.setMinimumSize(960, 600)
 
         self._fabrica_detector = fabrica_detector  # en las pruebas se pasa un detector falso
         self._servicio: ServicioConteo | None = None
         self._hilo: HiloAnalisis | None = None
         self._pausado = False
+        self._etapa = 0
         self.resultado = None  # ResultadoAnalisis del último análisis completo
         self._canales_analizados: list[Canal] = []  # los canales tal como estaban al analizar
         self.reproductor = Reproductor(self)
@@ -64,98 +94,170 @@ class VentanaPrincipal(QMainWindow):
         self._linea_sel = 0
         self.vista = VistaVideo()
 
-        # --- controles de reproducción
-        self.btn_abrir = QPushButton("Abrir video…")
-        self.btn_atras = QPushButton("⏮ -1")
-        self.btn_play = QPushButton("▶ Reproducir")
-        self.btn_adelante = QPushButton("+1 ⏭")
+        # --- cabecera: logo, abrir video y configuración
+        logo = QLabel()
+        logo.setPixmap(QPixmap(str(estilo.RECURSOS / "duotek.png")).scaledToHeight(
+            30, Qt.SmoothTransformation))
+        self.btn_abrir = _boton("Abrir video…", "carpeta", "primario")
+        self.lbl_archivo = _etiqueta("Sin video", "apagado")
+        self.btn_cargar = _boton("Cargar config", "subir", "fantasma")
+        self.btn_guardar = _boton("Guardar config", "guardar", "fantasma")
+        cab = QHBoxLayout()
+        cab.setContentsMargins(16, 8, 16, 8)
+        cab.setSpacing(14)
+        cab.addWidget(logo)
+        cab.addWidget(_etiqueta("Contador de peces", "apagado"))
+        cab.addSpacing(8)
+        cab.addWidget(self.btn_abrir)
+        cab.addWidget(self.lbl_archivo)
+        cab.addStretch()
+        cab.addWidget(self.btn_cargar)
+        cab.addWidget(self.btn_guardar)
+        cabecera = QFrame()
+        cabecera.setObjectName("cabecera")
+        cabecera.setLayout(cab)
+
+        # --- video y controles de reproducción
         self.barra = QSlider(Qt.Horizontal)
         self.barra.setEnabled(False)
-        self.lbl_info = QLabel("Sin video")
-        for b in (self.btn_atras, self.btn_play, self.btn_adelante):
+        self.lbl_info = _etiqueta("Sin video", "apagado")
+        self.btn_atras = _boton("", "atras")
+        self.btn_atras.setToolTip("Fotograma anterior")
+        self.btn_play = _boton("Reproducir", "play", "primario")
+        self.btn_adelante = _boton("", "adelante")
+        self.btn_adelante.setToolTip("Fotograma siguiente")
+        self.btn_vel_menos = _boton("", "menos")
+        self.btn_vel_menos.setToolTip("Más lento")
+        self.lbl_vel = _etiqueta("1×")
+        self.lbl_vel.setAlignment(Qt.AlignCenter)
+        self.lbl_vel.setMinimumWidth(44)
+        self.btn_vel_mas = _boton("", "mas")
+        self.btn_vel_mas.setToolTip("Más rápido")
+        self._controles_video = (self.btn_atras, self.btn_play, self.btn_adelante,
+                                 self.btn_vel_menos, self.btn_vel_mas)
+        for b in self._controles_video:
             b.setEnabled(False)
 
         controles = QHBoxLayout()
-        controles.addWidget(self.btn_abrir)
+        controles.setSpacing(8)
         controles.addStretch()
         controles.addWidget(self.btn_atras)
         controles.addWidget(self.btn_play)
         controles.addWidget(self.btn_adelante)
+        controles.addSpacing(18)
+        controles.addWidget(self.btn_vel_menos)
+        controles.addWidget(self.lbl_vel)
+        controles.addWidget(self.btn_vel_mas)
         controles.addStretch()
 
         izq = QVBoxLayout()
+        izq.setContentsMargins(16, 12, 16, 12)
+        izq.setSpacing(8)
         izq.addWidget(self.vista, 1)
         izq.addWidget(self.barra)
         izq.addWidget(self.lbl_info)
         izq.addLayout(controles)
 
-        # --- panel de tubos y líneas
-        self.lista = QListWidget()
-        self.btn_agregar = QPushButton("Nueva línea")
-        self.btn_quitar_linea = QPushButton("Quitar línea")
-        self.btn_izq = QPushButton("◀")
-        self.btn_der = QPushButton("▶")
-        self.btn_guardar = QPushButton("Guardar configuración…")
-        self.btn_cargar = QPushButton("Cargar configuración…")
-        self.lbl_lineas = QLabel("")
+        # --- etapa 1: video
+        self.btn_abrir_etapa = _boton("Abrir video…", "carpeta", "primario")
 
-        ayuda = QLabel("Arrastra las líneas sobre el video para separar los tubos. "
-                       "Marca o desmarca un tubo para incluirlo o no en el análisis.")
-        ayuda.setWordWrap(True)
-
+        # --- etapa 2: líneas
+        self.btn_agregar = _boton("Nueva línea", "mas")
+        self.btn_quitar_linea = _boton("Quitar línea", "papelera", "peligro")
+        self.btn_izq = _boton("Mover", "izquierda")
+        self.btn_der = _boton("Mover", "derecha")
+        self.btn_der.setLayoutDirection(Qt.RightToLeft)  # el icono queda a la derecha del texto
+        self.lbl_lineas = _etiqueta("", "apagado")
         self.grupo_chips = QButtonGroup(self)  # una sola línea elegida a la vez
         self.fila_chips = QHBoxLayout()
+        self.fila_chips.setContentsMargins(0, 0, 0, 0)
         self.caja_chips = QWidget()
         self.caja_chips.setLayout(self.fila_chips)
-        fila_mover = QHBoxLayout()
-        fila_mover.addWidget(self.btn_izq)
-        fila_mover.addWidget(self.btn_der)
         fila_nueva = QHBoxLayout()
         fila_nueva.addWidget(self.btn_agregar)
         fila_nueva.addWidget(self.btn_quitar_linea)
-        self.caja = QGroupBox("Líneas")
-        form = QVBoxLayout(self.caja)
-        form.addWidget(self.lbl_lineas)
-        form.addWidget(self.caja_chips)
-        form.addLayout(fila_nueva)
-        form.addLayout(fila_mover)
+        fila_mover = QHBoxLayout()
+        fila_mover.addWidget(self.btn_izq)
+        fila_mover.addWidget(self.btn_der)
 
-        # --- análisis
-        self.btn_analizar = QPushButton("Analizar video")
-        self.btn_pausar = QPushButton("Pausar")
-        self.btn_cancelar = QPushButton("Cancelar")
+        # --- etapa 3: conteo
+        self.btn_analizar = _boton("Iniciar análisis", "play", "primario")
+        self.btn_pausar = _boton("Pausar", "pausa")
+        self.btn_cancelar = _boton("Cancelar", "detener", "peligro")
         self.btn_pausar.setEnabled(False)
         self.btn_cancelar.setEnabled(False)
-        self.btn_exportar = QPushButton("Exportar resultados…")
-        self.btn_exportar.setEnabled(False)  # se habilita al terminar un análisis
         self.progreso = QProgressBar()
         self.progreso.setRange(0, 100)
-        self.lbl_resultado = QLabel("")
-        self.lbl_resultado.setWordWrap(True)
+        self.progreso.setTextVisible(False)
+        self.lbl_resultado = _etiqueta("", "apagado", ajustar=True)
         fila_analisis = QHBoxLayout()
         fila_analisis.addWidget(self.btn_pausar)
         fila_analisis.addWidget(self.btn_cancelar)
 
-        der = QVBoxLayout()
-        der.addWidget(QLabel("Tubos a contar:"))
-        der.addWidget(self.lista, 1)
-        der.addWidget(self.caja)
-        der.addWidget(ayuda)
-        der.addWidget(self.btn_guardar)
-        der.addWidget(self.btn_cargar)
-        der.addWidget(self.btn_analizar)
-        der.addLayout(fila_analisis)
-        der.addWidget(self.progreso)
-        der.addWidget(self.btn_exportar)
-        der.addWidget(self.lbl_resultado)
-        panel = QWidget()
-        panel.setLayout(der)
-        panel.setFixedWidth(280)
+        # --- etapa 4: exportar
+        self.btn_exportar = _boton("Exportar resultados…", "descargar", "primario")
+        self.btn_exportar.setEnabled(False)  # se habilita al terminar un análisis
 
-        raiz = QHBoxLayout()
-        raiz.addLayout(izq, 1)
-        raiz.addWidget(panel)
+        self.pila = QStackedWidget()
+        for contenido in (
+            [self.btn_abrir_etapa],
+            [self.lbl_lineas, self.caja_chips, fila_nueva, fila_mover],
+            [self.btn_analizar, fila_analisis, self.progreso, self.lbl_resultado],
+            [self.btn_exportar],
+        ):
+            pagina = QWidget()
+            col = QVBoxLayout(pagina)
+            col.setContentsMargins(0, 0, 0, 0)
+            col.setSpacing(8)
+            for elemento in contenido:
+                if isinstance(elemento, QWidget):
+                    col.addWidget(elemento)
+                else:  # una fila (layout)
+                    col.addLayout(elemento)
+            col.addStretch()
+            self.pila.addWidget(pagina)
+
+        # --- panel derecho: conteo, etapa, controles de la etapa y navegación
+        self.conteo = PanelConteo()
+        self.barra_etapas = BarraEtapas(ETAPAS)
+        self.lbl_pista = _etiqueta("", "pista", ajustar=True)
+        self.btn_retroceder = _boton("Retroceder", "izquierda")
+        self.btn_seguir = _boton("Seguir", "derecha", "primario")
+        self.btn_seguir.setLayoutDirection(Qt.RightToLeft)
+        nav = QHBoxLayout()
+        nav.setSpacing(10)
+        nav.addWidget(self.btn_retroceder, 1)
+        nav.addWidget(self.btn_seguir, 1)
+        separador = QFrame()
+        separador.setObjectName("separador")
+
+        der = QVBoxLayout()
+        der.setContentsMargins(16, 12, 16, 12)
+        der.setSpacing(10)
+        der.addWidget(self.conteo)
+        der.addWidget(self.barra_etapas)
+        der.addWidget(self.lbl_pista)
+        der.addWidget(self.pila, 1)
+        der.addWidget(separador)
+        der.addLayout(nav)
+        panel = QFrame()
+        panel.setObjectName("panel")
+        panel.setLayout(der)
+        panel.setMinimumWidth(320)
+        panel.setMaximumWidth(460)
+
+        cuerpo = QHBoxLayout()
+        cuerpo.setContentsMargins(0, 0, 0, 0)
+        cuerpo.setSpacing(0)
+        cuerpo.addLayout(izq, 3)
+        cuerpo.addWidget(panel, 2)
+        raiz = QVBoxLayout()
+        raiz.setContentsMargins(0, 0, 0, 0)
+        raiz.setSpacing(0)
+        raiz.addWidget(cabecera)
+        raiz.addLayout(cuerpo, 1)
         central = QWidget()
+        central.setObjectName("central")
         central.setLayout(raiz)
         self.setCentralWidget(central)
 
@@ -167,18 +269,22 @@ class VentanaPrincipal(QMainWindow):
 
         # --- conexiones
         self.btn_abrir.clicked.connect(self.abrir_video)
+        self.btn_abrir_etapa.clicked.connect(self.abrir_video)
         self.btn_play.clicked.connect(self.reproductor.alternar)
         self.btn_atras.clicked.connect(lambda: self.reproductor.paso(-1))
         self.btn_adelante.clicked.connect(lambda: self.reproductor.paso(1))
+        self.btn_vel_menos.clicked.connect(lambda: self.reproductor.cambiar_velocidad(-1))
+        self.btn_vel_mas.clicked.connect(lambda: self.reproductor.cambiar_velocidad(1))
         self.barra.valueChanged.connect(self.reproductor.ir_a)
         self.reproductor.fotograma_cambiado.connect(self._on_fotograma)
         self.reproductor.estado_cambiado.connect(self._on_estado)
         self.reproductor.video_abierto.connect(self._on_video_abierto)
+        self.reproductor.velocidad_cambiada.connect(self._on_velocidad)
 
         self.vista.lineas_modificadas.connect(self._on_lineas_modificadas)
         self.vista.linea_seleccionada.connect(self._elegir_linea)
         self.grupo_chips.idClicked.connect(self._elegir_linea)
-        self.lista.itemChanged.connect(self._on_item_cambiado)
+        self.conteo.seleccion_cambiada.connect(self._on_tubo_marcado)
         self.btn_agregar.clicked.connect(self._agregar_linea)
         self.btn_quitar_linea.clicked.connect(self._quitar_linea)
         self.btn_izq.clicked.connect(lambda: self._empujar_linea(-PASO_LINEA))
@@ -189,7 +295,24 @@ class VentanaPrincipal(QMainWindow):
         self.btn_pausar.clicked.connect(self._alternar_pausa)
         self.btn_cancelar.clicked.connect(self._cancelar_analisis)
         self.btn_exportar.clicked.connect(self.exportar_resultados)
+        self.btn_retroceder.clicked.connect(lambda: self._ir_a_etapa(self._etapa - 1))
+        self.btn_seguir.clicked.connect(lambda: self._ir_a_etapa(self._etapa + 1))
         self._refrescar_tubos()
+        self._ir_a_etapa(0)
+
+    # ------------------------------------------------------------------ etapas
+    def _ir_a_etapa(self, n: int) -> None:
+        self._etapa = min(max(n, 0), len(ETAPAS) - 1)
+        self.pila.setCurrentIndex(self._etapa)
+        self.barra_etapas.set_etapa(self._etapa)
+        self.lbl_pista.setText(PISTAS[self._etapa])
+        self._actualizar_nav()
+
+    def _actualizar_nav(self) -> None:
+        libre = self._hilo is None  # mientras se analiza no se cambia de etapa
+        self.btn_retroceder.setEnabled(libre and self._etapa > 0)
+        self.btn_seguir.setEnabled(
+            libre and self._etapa < len(ETAPAS) - 1 and (self._etapa > 0 or self.reproductor.abierto))
 
     # ------------------------------------------------------------------ video
     def abrir_video(self, _checked: bool = False, ruta: str | None = None) -> None:
@@ -208,9 +331,15 @@ class VentanaPrincipal(QMainWindow):
         self.barra.setRange(0, r.total - 1)
         self.barra.blockSignals(False)
         self.barra.setEnabled(True)
-        for b in (self.btn_atras, self.btn_play, self.btn_adelante):
+        for b in self._controles_video:
             b.setEnabled(True)
+        self._on_velocidad(r.velocidad)
+        self.lbl_archivo.setText(Path(ruta).name)
         self.setWindowTitle(f"Tracker – {Path(ruta).name}")
+        if self._etapa == 0:  # recién abierto el video: se pasa a poner las líneas
+            self._ir_a_etapa(1)
+        else:
+            self._actualizar_nav()
 
     def _on_fotograma(self, indice: int, frame) -> None:
         self.vista.mostrar_fotograma(frame)
@@ -224,7 +353,14 @@ class VentanaPrincipal(QMainWindow):
         )
 
     def _on_estado(self, reproduciendo: bool) -> None:
-        self.btn_play.setText("⏸ Pausar" if reproduciendo else "▶ Reproducir")
+        self.btn_play.setText("Pausar" if reproduciendo else "Reproducir")
+        iconos.poner_icono(self.btn_play, "pausa" if reproduciendo else "play")
+
+    def _on_velocidad(self, v: float) -> None:
+        self.lbl_vel.setText(f"{v:g}×")
+        abierto = self.reproductor.abierto
+        self.btn_vel_menos.setEnabled(abierto and v > VELOCIDADES[0])
+        self.btn_vel_mas.setEnabled(abierto and v < VELOCIDADES[-1])
 
     # ------------------------------------------------------- tubos y líneas
     def _refrescar_tubos(self, seleccion: list[bool] | None = None) -> None:
@@ -235,29 +371,24 @@ class VentanaPrincipal(QMainWindow):
         self.canales = cn.canales_desde_lineas(self.lineas, seleccion)
         self._linea_sel = min(max(self._linea_sel, 0), len(self.lineas) - 1)
 
-        self.lista.blockSignals(True)
-        self.lista.clear()
-        for i, c in enumerate(self.canales):
-            it = QListWidgetItem(c.nombre)
-            pm = QPixmap(14, 14)
-            pm.fill(QColor(cn.color_de(i)))
-            it.setIcon(QIcon(pm))
-            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
-            it.setCheckState(Qt.Checked if c.seleccionado else Qt.Unchecked)
-            it.setData(Qt.UserRole, c.id)
-            self.lista.addItem(it)
-        self.lista.blockSignals(False)
+        self.conteo.set_tubos([c.nombre for c in self.canales], [c.seleccionado for c in self.canales])
 
         for b in list(self.grupo_chips.buttons()):  # un botón L1, L2… por línea
             self.grupo_chips.removeButton(b)
             self.fila_chips.removeWidget(b)
+            b.hide()  # deleteLater tarda en actuar: mientras tanto no debe verse
+            b.setParent(None)
             b.deleteLater()
+        while self.fila_chips.count():  # y el espacio elástico del final
+            self.fila_chips.takeAt(0)
         for i in range(len(self.lineas)):
             b = QPushButton(f"L{i + 1}")
+            b.setProperty("rol", "chip")
             b.setCheckable(True)
             b.setChecked(i == self._linea_sel)
             self.grupo_chips.addButton(b, i)
             self.fila_chips.addWidget(b)
+        self.fila_chips.addStretch()  # los botones L1, L2… quedan juntos, a la izquierda
         n = len(self.lineas)
         self.lbl_lineas.setText(f"{n} {'línea' if n == 1 else 'líneas'} = {n + 1} tubos")
 
@@ -272,6 +403,9 @@ class VentanaPrincipal(QMainWindow):
         self.btn_quitar_linea.setEnabled(libre and len(self.lineas) > 1)
         self.btn_izq.setEnabled(libre)
         self.btn_der.setEnabled(libre)
+        self.btn_quitar_linea.setText(f"Quitar L{self._linea_sel + 1}")
+        self.btn_izq.setText(f"Mover L{self._linea_sel + 1}")
+        self.btn_der.setText(f"Mover L{self._linea_sel + 1}")
 
     def _agregar_linea(self) -> None:
         if len(self.lineas) >= cn.MAX_LINEAS:
@@ -305,6 +439,7 @@ class VentanaPrincipal(QMainWindow):
         if boton is not None:
             boton.setChecked(True)
         self.vista.set_seleccion(indice)
+        self._actualizar_botones_lineas()
 
     def _on_lineas_modificadas(self, lineas: list[float]) -> None:
         """Llega mientras se arrastra una línea en el video."""
@@ -312,12 +447,10 @@ class VentanaPrincipal(QMainWindow):
         self.canales = cn.canales_desde_lineas(lineas, [c.seleccionado for c in self.canales])
         self.vista.set_canales(self.canales)
 
-    def _on_item_cambiado(self, it: QListWidgetItem) -> None:
-        cid = it.data(Qt.UserRole)
-        for c in self.canales:
-            if c.id == cid:
-                c.seleccionado = it.checkState() == Qt.Checked
-        self.vista.set_canales(self.canales)
+    def _on_tubo_marcado(self, indice: int, marcado: bool) -> None:
+        if 0 <= indice < len(self.canales):
+            self.canales[indice].seleccionado = marcado
+            self.vista.set_canales(self.canales)
 
     # ----------------------------------------------------------- persistencia
     def guardar_config(self) -> None:
@@ -384,7 +517,7 @@ class VentanaPrincipal(QMainWindow):
         self.reproductor.pausar()
         self.resultado = None
         self._canales_analizados = copy.deepcopy(self.canales)
-        self.lbl_resultado.setText("")
+        self.lbl_resultado.setText("Contando…")
         self.progreso.setRange(0, 100)
         self.progreso.setValue(0)
         # desde el primer momento cada tubo elegido aparece con 0
@@ -401,10 +534,12 @@ class VentanaPrincipal(QMainWindow):
 
     def _set_analizando(self, activo: bool) -> None:
         """Mientras se analiza no se puede abrir otro video ni editar los canales."""
-        for w in (self.btn_abrir, self.btn_cargar, self.btn_analizar, self.lista,
+        for w in (self.btn_abrir, self.btn_abrir_etapa, self.btn_cargar, self.btn_analizar,
                   self.caja_chips, self.vista):
             w.setEnabled(not activo)
+        self.conteo.editable = not activo
         self._actualizar_botones_lineas()
+        self._actualizar_nav()
         self.btn_pausar.setEnabled(activo)
         self.btn_cancelar.setEnabled(activo)
         self.btn_exportar.setEnabled(not activo and self.resultado is not None)
@@ -431,19 +566,15 @@ class VentanaPrincipal(QMainWindow):
         if total > 0:
             self.progreso.setValue(min(100, hechos * 100 // total))
 
-    def _texto_conteos(self, conteos: dict[str, int]) -> str:
-        nombres = {c.id: c.nombre for c in self._canales_analizados}
-        partes = [f"{nombres.get(cid, cid)}: {n}" for cid, n in conteos.items()]
-        return "\n".join(partes) + f"\nTotal: {sum(conteos.values())}"
-
     def _mostrar_conteos(self, conteos: dict[str, int]) -> None:
-        """Conteo por tubo mientras el análisis avanza."""
-        self.lbl_resultado.setText("Contando…\n" + self._texto_conteos(conteos))
+        """Conteo de cada tubo en el marcador mientras el análisis avanza."""
+        self.conteo.set_conteos([conteos.get(c.id) for c in self.canales])
 
     def _on_terminado(self, resultado) -> None:
         self.resultado = resultado
         self.progreso.setValue(100)
-        self.lbl_resultado.setText("Análisis terminado.\n" + self._texto_conteos(resultado.conteos))
+        self._mostrar_conteos(resultado.conteos)
+        self.lbl_resultado.setText(f"Análisis terminado. Total: {resultado.total}")
 
     def exportar_resultados(self, _checked: bool = False, carpeta: str | None = None) -> None:
         r = self.resultado
@@ -466,10 +597,12 @@ class VentanaPrincipal(QMainWindow):
 
     def _on_cancelado(self) -> None:
         self.progreso.setValue(0)
+        self.conteo.set_conteos([None] * len(self.canales))
         self.lbl_resultado.setText("Análisis cancelado.")
 
     def _on_error_analisis(self, mensaje: str) -> None:
         self.progreso.setValue(0)
+        self.conteo.set_conteos([None] * len(self.canales))
         QMessageBox.warning(self, "Error en el análisis", mensaje)
 
     def _limpiar_hilo(self) -> None:
@@ -489,6 +622,7 @@ class VentanaPrincipal(QMainWindow):
 
 def main() -> None:
     app = QApplication(sys.argv)
+    estilo.aplicar(app)
     ventana = VentanaPrincipal()
     ventana.show()
     sys.exit(app.exec())
