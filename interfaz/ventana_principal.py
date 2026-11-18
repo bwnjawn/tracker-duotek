@@ -20,7 +20,7 @@ from src.exportador import exportar
 from src.servicio import ErrorAnalisis, ServicioConteo
 
 from . import canales as cn
-from . import estilo, iconos
+from . import capas, estilo, iconos
 from .hilo_analisis import HiloAnalisis
 from .panel_conteo import BarraEtapas, PanelConteo
 from .reproductor import VELOCIDADES, Reproductor
@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 PESOS_DEFECTO = Path(__file__).resolve().parent.parent / "weights" / "exp_01.pt"
 PASO_LINEA = 0.01  # lo que mueven los botones ◀ ▶ (fracción del ancho del video)
 
+NOMBRES_CAPAS = {"cajas": "Cajas", "ids": "IDs", "ruta": "Ruta", "lineas": "Líneas"}
 ETAPAS = ["Video", "Líneas", "Conteo", "Exportar"]
 PISTAS = [
     "Abra la grabación de los tubos para comenzar.",
@@ -89,6 +90,7 @@ class VentanaPrincipal(QMainWindow):
         self.resultado = None  # ResultadoAnalisis del último análisis completo
         self._canales_analizados: list[Canal] = []  # los canales tal como estaban al contar
         self._cuadros_evento: dict[str, list[int]] = {}  # tubo -> cuadros en que se contó un pez
+        self._ids_contados: list[tuple[int, int]] = []  # (cuadro, id del pez) de cada conteo
         self.reproductor = Reproductor(self)
         # N líneas verticales dividen el video en N+1 tubos (los canales se derivan de ellas)
         self.lineas: list[float] = cn.repartir_lineas(1)
@@ -152,9 +154,22 @@ class VentanaPrincipal(QMainWindow):
         controles.addWidget(self.btn_vel_mas)
         controles.addStretch()
 
+        self.btn_capas: dict[str, QPushButton] = {}
+        fila_capas = QHBoxLayout()
+        fila_capas.setSpacing(8)
+        for nombre, texto in NOMBRES_CAPAS.items():
+            b = _boton(texto, "ojo", "capa")
+            b.setCheckable(True)
+            b.setChecked(True)
+            b.setToolTip(f"Mostrar u ocultar: {texto.lower()}")
+            self.btn_capas[nombre] = b
+            fila_capas.addWidget(b)
+        fila_capas.addStretch()
+
         izq = QVBoxLayout()
         izq.setContentsMargins(16, 12, 16, 12)
         izq.setSpacing(8)
+        izq.addLayout(fila_capas)
         izq.addWidget(self.vista, 1)
         izq.addWidget(self.barra)
         izq.addWidget(self.lbl_info)
@@ -283,6 +298,8 @@ class VentanaPrincipal(QMainWindow):
         self.reproductor.video_abierto.connect(self._on_video_abierto)
         self.reproductor.velocidad_cambiada.connect(self._on_velocidad)
 
+        for nombre, b in self.btn_capas.items():
+            b.toggled.connect(lambda visible, n=nombre: self._on_capa(n, visible))
         self.vista.lineas_modificadas.connect(self._on_lineas_modificadas)
         self.vista.linea_seleccionada.connect(self._elegir_linea)
         self.grupo_chips.idClicked.connect(self._elegir_linea)
@@ -345,8 +362,8 @@ class VentanaPrincipal(QMainWindow):
         else:
             self._actualizar_nav()
 
-    def _on_fotograma(self, indice: int, frame) -> None:
-        self.vista.mostrar_fotograma(frame)
+    def _mostrar_posicion(self, indice: int) -> None:
+        """Barra de tiempo y texto con el fotograma, el tiempo y los fps."""
         self.barra.blockSignals(True)
         self.barra.setValue(indice)
         self.barra.blockSignals(False)
@@ -355,8 +372,34 @@ class VentanaPrincipal(QMainWindow):
             f"Fotograma {indice + 1} / {r.total}   ·   "
             f"{_tiempo(indice / r.fps)} / {_tiempo(r.total / r.fps)}   ·   {r.fps:.1f} fps"
         )
+
+    def _on_fotograma(self, indice: int, frame) -> None:
+        self.vista.mostrar_fotograma(frame)
+        self.vista.set_marcas(self._marcas_en(indice))
+        self._mostrar_posicion(indice)
         if self.resultado is not None:  # ya se contó: el marcador muestra lo contado hasta aquí
             self._mostrar_conteos(self._conteos_hasta(indice))
+
+    def _on_fotograma_conteo(self, indice: int, frame, marcas) -> None:
+        """Llega mientras se cuenta: el video muestra lo que el modelo va viendo."""
+        self.vista.mostrar_fotograma(frame)
+        self.vista.set_marcas(marcas)
+        self._mostrar_posicion(indice)
+
+    def _on_capa(self, nombre: str, visible: bool) -> None:
+        self.vista.set_capa(nombre, visible)
+        iconos.poner_icono(self.btn_capas[nombre], "ojo" if visible else "ojo_tachado")
+
+    def _marcas_en(self, indice: int) -> list[capas.Marca]:
+        """Peces detectados en el cuadro `indice` (solo si ya se contó el video)."""
+        r = self.resultado
+        if r is None:
+            return []
+        historial = capas.HistorialRutas()
+        for k in range(max(0, indice - capas.LARGO_RUTA + 1), indice + 1):
+            historial.agregar(r.detecciones.get(k, []))
+        contados = {i for cuadro, i in self._ids_contados if cuadro <= indice}
+        return capas.marcas_de(r.detecciones.get(indice, []), historial, contados)
 
     def _alternar_reproduccion(self) -> None:
         if self._hilo is None:  # mientras se cuenta, el video lo maneja el conteo
@@ -528,6 +571,7 @@ class VentanaPrincipal(QMainWindow):
 
         self.reproductor.pausar()
         self.resultado = None
+        self.vista.set_marcas([])  # fuera los peces dibujados del resultado anterior
         self._canales_analizados = copy.deepcopy(self.canales)
         self.lbl_resultado.setText("Contando…")
         self.progreso.setRange(0, 100)
@@ -537,6 +581,7 @@ class VentanaPrincipal(QMainWindow):
         self._hilo = HiloAnalisis(self._servicio, self.reproductor.ruta, self.canales, self)
         self._hilo.progreso.connect(self._on_progreso)
         self._hilo.conteos.connect(self._mostrar_conteos)
+        self._hilo.fotograma.connect(self._on_fotograma_conteo)
         self._hilo.terminado.connect(self._on_terminado)
         self._hilo.cancelado.connect(self._on_cancelado)
         self._hilo.error.connect(self._on_error_analisis)
@@ -589,6 +634,7 @@ class VentanaPrincipal(QMainWindow):
         self.resultado = resultado
         self.progreso.setValue(100)
         self._cuadros_evento = {}
+        self._ids_contados = [(e.cuadro, e.id) for e in resultado.eventos if e.id is not None]
         for e in resultado.eventos:
             self._cuadros_evento.setdefault(e.canal, []).append(e.cuadro)
         for cuadros in self._cuadros_evento.values():
@@ -612,6 +658,8 @@ class VentanaPrincipal(QMainWindow):
             return
         self.resultado = None
         self._cuadros_evento = {}
+        self._ids_contados = []
+        self.vista.set_marcas([])  # los peces dibujados eran del resultado que se descarta
         self.btn_exportar.setEnabled(False)
         self.progreso.setValue(0)
         self.lbl_resultado.setText(motivo)

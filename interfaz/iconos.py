@@ -20,6 +20,8 @@ _TRAZOS = {
     "papelera": '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
     "izquierda": '<path d="m15 18-6-6 6-6"/>',
     "derecha": '<path d="m9 18 6-6-6-6"/>',
+    "ojo": '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+    "ojo_tachado": '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><path d="m3 3 18 18"/>',
     "check": '<path d="M20 6 9 17l-5-5"/>',
     "detener": '<rect x="5" y="5" width="14" height="14" rx="2"/>',
     "descargar": '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',

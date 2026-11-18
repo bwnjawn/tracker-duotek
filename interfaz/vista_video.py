@@ -1,24 +1,32 @@
-"""Widget que dibuja el fotograma actual y los tubos encima.
+"""Widget que dibuja el fotograma actual, los tubos y lo que detectó el modelo.
 
 Los tubos se definen con líneas verticales: N líneas dividen el video en N+1
 tubos. Arrastrar una línea con el mouse (o el dedo) la mueve; las líneas no
-pueden cruzarse. Las coordenadas son normalizadas (0..1) respecto al fotograma.
+pueden cruzarse. Sobre el video se pueden mostrar cuatro capas, cada una con su
+interruptor: cajas, IDs, rutas de los peces y las líneas de los tubos.
+Las coordenadas son normalizadas (0..1) respecto al fotograma.
 """
 from __future__ import annotations
 
 import cv2
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPen
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from src.canales import Canal
 
 from .canales import color_de, mover_linea
+from .capas import Marca
 
 RADIO_ASA = 14        # px: radio del círculo con el nombre de la línea
 TOLERANCIA = 16       # px de distancia al trazo para poder agarrar una línea
 ALTO_ASA = 0.38       # altura (fracción del video) a la que se dibuja el círculo
+CAPAS = ("cajas", "ids", "ruta", "lineas")
+
+COLOR_CAJA = QColor("#22d3ee")        # pez todavía sin contar
+COLOR_CAJA_CONTADO = QColor("#4ade80")  # pez que ya cruzó la línea de conteo
+COLOR_RUTA = QColor("#fbbf24")
 
 
 class VistaVideo(QWidget):
@@ -30,6 +38,8 @@ class VistaVideo(QWidget):
         self._imagen: QImage | None = None
         self._lineas: list[float] = []
         self._canales: list[Canal] = []
+        self._marcas: list[Marca] = []
+        self.capas = {nombre: True for nombre in CAPAS}
         self._sel = -1
         self._arrastrando = -1
         self.setMouseTracking(True)
@@ -56,6 +66,15 @@ class VistaVideo(QWidget):
         self._sel = indice
         self.update()
 
+    def set_marcas(self, marcas: list[Marca]) -> None:
+        """Los peces detectados en el fotograma que se está mostrando."""
+        self._marcas = list(marcas)
+        self.update()
+
+    def set_capa(self, nombre: str, visible: bool) -> None:
+        self.capas[nombre] = visible
+        self.update()
+
     # -- geometría ----------------------------------------------------------
     def _rect_imagen(self) -> QRectF:
         if self._imagen is None:
@@ -73,8 +92,14 @@ class VistaVideo(QWidget):
         a = self._rect_imagen()
         return min(max((px - a.x()) / a.width(), 0.0), 1.0)
 
+    def _punto(self, x: float, y: float) -> QPointF:
+        a = self._rect_imagen()
+        return QPointF(a.x() + x * a.width(), a.y() + y * a.height())
+
     def _linea_en(self, pos: QPointF) -> int:
         """Índice de la línea más cercana al punto (dentro de la tolerancia), o -1."""
+        if not self.capas["lineas"]:  # con las líneas ocultas no se pueden agarrar
+            return -1
         mejor, dist = -1, TOLERANCIA
         for i, x in enumerate(self._lineas):
             d = abs(pos.x() - self._x_a_px(x))
@@ -93,7 +118,13 @@ class VistaVideo(QWidget):
             return
         area = self._rect_imagen()
         p.drawImage(area, self._imagen)
+        if self.capas["lineas"]:
+            self._pintar_tubos(p, area)
+        self._pintar_peces(p)
+        if self.capas["lineas"]:
+            self._pintar_lineas(p, area)
 
+    def _pintar_tubos(self, p: QPainter, area: QRectF) -> None:
         bordes = [0.0, *self._lineas, 1.0]
         for i, c in enumerate(self._canales):
             if i + 1 >= len(bordes):
@@ -115,6 +146,34 @@ class VistaVideo(QWidget):
             p.setPen(color)
             p.drawText(QRectF(x1, area.top() + 6, x2 - x1, 20), Qt.AlignHCenter, c.nombre)
 
+    def _pintar_peces(self, p: QPainter) -> None:
+        for m in self._marcas:
+            color = COLOR_CAJA_CONTADO if m.contado else COLOR_CAJA
+            if self.capas["ruta"] and len(m.ruta) > 1:
+                trazo = QPainterPath(self._punto(*m.ruta[0]))
+                for x, y in m.ruta[1:]:
+                    trazo.lineTo(self._punto(x, y))
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QPen(COLOR_RUTA, 2))
+                p.drawPath(trazo)
+            esquina = self._punto(m.caja[0], m.caja[1])
+            opuesta = self._punto(m.caja[2], m.caja[3])
+            if self.capas["cajas"]:
+                p.setBrush(Qt.NoBrush)
+                p.setPen(QPen(color, 2))
+                p.drawRect(QRectF(esquina, opuesta))
+            if self.capas["ids"]:
+                texto = f"#{m.id}" if m.id is not None else "#?"
+                ancho = p.fontMetrics().horizontalAdvance(texto) + 12
+                etiqueta = QRectF(esquina.x(), esquina.y() - 20, ancho, 18)
+                p.setPen(Qt.NoPen)
+                p.setBrush(color)
+                p.drawRoundedRect(etiqueta, 4, 4)
+                p.setPen(QColor("#0b1d26"))
+                p.drawText(etiqueta, Qt.AlignCenter, texto)
+        p.setBrush(Qt.NoBrush)
+
+    def _pintar_lineas(self, p: QPainter, area: QRectF) -> None:
         for i, x in enumerate(self._lineas):
             px = self._x_a_px(x)
             elegida = i == self._sel

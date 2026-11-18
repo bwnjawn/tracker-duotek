@@ -299,3 +299,50 @@ def test_abrir_otro_video_descarta_el_resultado(app, video, tmp_path):
     w.release()
     v.abrir_video(ruta=str(otro))
     assert v.resultado is None and "otro video" in v.lbl_resultado.text()
+
+
+def test_el_video_se_ve_mientras_se_cuenta(app, video):
+    v = ventana(app, video, DetectorLento())
+    llegaron = []
+    original = v.vista.set_marcas
+    v.vista.set_marcas = lambda marcas: (llegaron.append(list(marcas)), original(marcas))[1]
+
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+    antes_del_final = llegaron[:-1]  # lo último es el salto al final, al terminar
+    assert len(antes_del_final) >= 3, "durante el conteo debieron llegar varios fotogramas"
+    pez = [m for marcas in antes_del_final for m in marcas]
+    assert pez and all(m.id == 7 for m in pez)  # el pez falso, con su caja normalizada
+    assert pez[0].caja[0] == 30 / 320
+
+
+def test_despues_de_contar_el_video_muestra_los_peces_y_cuando_se_cuentan(app, video):
+    v = ventana(app, video, DetectorLento())
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+
+    v.reproductor.ir_a(1)
+    (m,) = v.vista._marcas
+    assert m.id == 7 and not m.contado  # todavía no cruza la línea
+    v.reproductor.ir_a(CUADROS - 1)
+    (m,) = v.vista._marcas
+    assert m.contado and len(m.ruta) > 1  # ya cruzó, y tiene ruta
+
+
+def test_las_capas_se_prenden_y_se_apagan(app):
+    v = VentanaPrincipal()
+    assert all(v.vista.capas.values()) and set(v.btn_capas) == {"cajas", "ids", "ruta", "lineas"}
+    v.btn_capas["ids"].click()
+    assert not v.vista.capas["ids"] and v.vista.capas["cajas"]
+    v.btn_capas["ids"].click()
+    assert v.vista.capas["ids"]
+
+
+def test_descartar_el_resultado_borra_los_peces_dibujados(app, video):
+    v = ventana(app, video, DetectorLento())
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+    v.reproductor.ir_a(2)
+    assert v.vista._marcas
+    v.btn_der.click()  # mover una línea descarta el resultado
+    assert v.vista._marcas == []

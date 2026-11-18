@@ -138,3 +138,18 @@ def test_un_archivo_viejo_se_rechaza_y_no_cambia_nada(app, tmp_path, avisos):
     v.cargar_config(ruta=str(ruta))
     assert "versión anterior" in avisos[-1]
     assert v.lineas == [0.5] and len(v.canales) == 2
+
+
+def test_con_las_lineas_ocultas_no_se_pueden_arrastrar(app, video):
+    v = VentanaPrincipal()
+    v.abrir_video(ruta=video)
+    v.show()
+    v.resize(1100, 650)
+    app.processEvents()
+    v.btn_capas["lineas"].click()  # oculta las líneas
+    vista = v.vista
+    desde = QPoint(int(vista._x_a_px(0.5)), vista.height() // 2)
+    QTest.mousePress(vista, Qt.LeftButton, pos=desde)
+    QTest.mouseMove(vista, desde + QPoint(60, 0))
+    QTest.mouseRelease(vista, Qt.LeftButton, pos=desde + QPoint(60, 0))
+    assert v.lineas == [0.5]

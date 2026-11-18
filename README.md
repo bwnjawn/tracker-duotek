@@ -45,7 +45,10 @@ Los pesos del modelo (`weights/exp_01.pt`) vienen en el repo.
    dibujados a mano) no se pueden cargar: se avisa y hay que marcar los tubos otra vez.
 5. **Iniciar conteo** (etapa 3) procesa el video completo en segundo plano. La barra
    muestra el avance, y se puede **Pausar**, **Reanudar** o **Cancelar**. El conteo de
-   cada tubo sube mientras se cuenta; un tubo sin peces muestra 0. Mientras se cuenta no
+   cada tubo sube mientras se cuenta; un tubo sin peces muestra 0. El video se muestra con
+   lo que ve el modelo: caja y número (ID) de cada pez, y su ruta. Los botones **Cajas**,
+   **IDs**, **Ruta** y **Líneas** (encima del video) muestran u ocultan cada capa; la caja
+   se pone verde cuando el pez ya se contó. Mientras se cuenta no
    se puede abrir otro video, mover las líneas ni usar los controles del video. Al
    terminar, el video queda en el último cuadro y, al reproducirlo o saltar a otro
    momento, el marcador muestra cuántos peces se habían contado hasta ahí. Si después

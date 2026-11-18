@@ -77,6 +77,9 @@ QPushButton[rol="peligro"]:hover { background: $peligro_suave; }
 QPushButton[rol="chip"] { border-radius: 16px; padding: 4px 12px; min-height: 24px; min-width: 22px; background: transparent; }
 QPushButton[rol="chip"]:checked { border-color: $ambar; color: $ambar; background: $ambar_suave; }
 
+QPushButton[rol="capa"] { border-radius: 16px; padding: 4px 12px; min-height: 24px; background: transparent; color: $apagado; }
+QPushButton[rol="capa"]:checked { border-color: $celeste; color: $texto; background: $celeste_suave; }
+
 QPushButton[rol="tile"] { background: $superficie; border-radius: 12px; padding: 0; min-height: 60px; }
 QPushButton[rol="tile"]:checked { border: 1px solid $celeste; background: $celeste_suave; }
 QPushButton[rol="tile"]:!checked { background: transparent; }
