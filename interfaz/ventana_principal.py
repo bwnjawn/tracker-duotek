@@ -2,6 +2,7 @@
 (Video, Líneas, Conteo, Exportar) con el conteo de cada tubo siempre a la vista."""
 from __future__ import annotations
 
+import bisect
 import copy
 import logging
 import sys
@@ -33,7 +34,7 @@ ETAPAS = ["Video", "Líneas", "Conteo", "Exportar"]
 PISTAS = [
     "Abra la grabación de los tubos para comenzar.",
     "Arrastre las líneas sobre el video o use los botones. Las líneas separan los tubos.",
-    "Toque un tubo para incluirlo o excluirlo del conteo. Luego inicie el análisis.",
+    "Toque un tubo para incluirlo o excluirlo. Luego pulse Iniciar conteo; al terminar, reproduzca el video para revisar.",
     "Exporte los resultados a la carpeta que elija.",
 ]
 
@@ -86,7 +87,8 @@ class VentanaPrincipal(QMainWindow):
         self._pausado = False
         self._etapa = 0
         self.resultado = None  # ResultadoAnalisis del último análisis completo
-        self._canales_analizados: list[Canal] = []  # los canales tal como estaban al analizar
+        self._canales_analizados: list[Canal] = []  # los canales tal como estaban al contar
+        self._cuadros_evento: dict[str, list[int]] = {}  # tubo -> cuadros en que se contó un pez
         self.reproductor = Reproductor(self)
         # N líneas verticales dividen el video en N+1 tubos (los canales se derivan de ellas)
         self.lineas: list[float] = cn.repartir_lineas(1)
@@ -181,7 +183,7 @@ class VentanaPrincipal(QMainWindow):
         fila_mover.addWidget(self.btn_der)
 
         # --- etapa 3: conteo
-        self.btn_analizar = _boton("Iniciar análisis", "play", "primario")
+        self.btn_analizar = _boton("Iniciar conteo", "play", "primario")
         self.btn_pausar = _boton("Pausar", "pausa")
         self.btn_cancelar = _boton("Cancelar", "detener", "peligro")
         self.btn_pausar.setEnabled(False)
@@ -196,7 +198,7 @@ class VentanaPrincipal(QMainWindow):
 
         # --- etapa 4: exportar
         self.btn_exportar = _boton("Exportar resultados…", "descargar", "primario")
-        self.btn_exportar.setEnabled(False)  # se habilita al terminar un análisis
+        self.btn_exportar.setEnabled(False)  # se habilita al terminar un conteo
 
         self.pila = QStackedWidget()
         for contenido in (
@@ -264,7 +266,7 @@ class VentanaPrincipal(QMainWindow):
         # --- atajos
         accion = QAction(self)
         accion.setShortcut(QKeySequence(Qt.Key_Space))
-        accion.triggered.connect(self.reproductor.alternar)
+        accion.triggered.connect(self._alternar_reproduccion)
         self.addAction(accion)
 
         # --- conexiones
@@ -309,10 +311,10 @@ class VentanaPrincipal(QMainWindow):
         self._actualizar_nav()
 
     def _actualizar_nav(self) -> None:
-        libre = self._hilo is None  # mientras se analiza no se cambia de etapa
+        libre = self._hilo is None  # mientras se cuenta no se cambia de etapa
+        puede_seguir = {0: self.reproductor.abierto, 2: self.resultado is not None}.get(self._etapa, True)
         self.btn_retroceder.setEnabled(libre and self._etapa > 0)
-        self.btn_seguir.setEnabled(
-            libre and self._etapa < len(ETAPAS) - 1 and (self._etapa > 0 or self.reproductor.abierto))
+        self.btn_seguir.setEnabled(libre and self._etapa < len(ETAPAS) - 1 and puede_seguir)
 
     # ------------------------------------------------------------------ video
     def abrir_video(self, _checked: bool = False, ruta: str | None = None) -> None:
@@ -334,6 +336,8 @@ class VentanaPrincipal(QMainWindow):
         for b in self._controles_video:
             b.setEnabled(True)
         self._on_velocidad(r.velocidad)
+        if self.resultado is not None and ruta != self.resultado.video:
+            self._descartar_resultado("Se abrió otro video: hay que contar de nuevo.")
         self.lbl_archivo.setText(Path(ruta).name)
         self.setWindowTitle(f"Tracker – {Path(ruta).name}")
         if self._etapa == 0:  # recién abierto el video: se pasa a poner las líneas
@@ -351,6 +355,12 @@ class VentanaPrincipal(QMainWindow):
             f"Fotograma {indice + 1} / {r.total}   ·   "
             f"{_tiempo(indice / r.fps)} / {_tiempo(r.total / r.fps)}   ·   {r.fps:.1f} fps"
         )
+        if self.resultado is not None:  # ya se contó: el marcador muestra lo contado hasta aquí
+            self._mostrar_conteos(self._conteos_hasta(indice))
+
+    def _alternar_reproduccion(self) -> None:
+        if self._hilo is None:  # mientras se cuenta, el video lo maneja el conteo
+            self.reproductor.alternar()
 
     def _on_estado(self, reproduciendo: bool) -> None:
         self.btn_play.setText("Pausar" if reproduciendo else "Reproducir")
@@ -358,14 +368,15 @@ class VentanaPrincipal(QMainWindow):
 
     def _on_velocidad(self, v: float) -> None:
         self.lbl_vel.setText(f"{v:g}×")
-        abierto = self.reproductor.abierto
-        self.btn_vel_menos.setEnabled(abierto and v > VELOCIDADES[0])
-        self.btn_vel_mas.setEnabled(abierto and v < VELOCIDADES[-1])
+        libre = self.reproductor.abierto and self._hilo is None
+        self.btn_vel_menos.setEnabled(libre and v > VELOCIDADES[0])
+        self.btn_vel_mas.setEnabled(libre and v < VELOCIDADES[-1])
 
     # ------------------------------------------------------- tubos y líneas
     def _refrescar_tubos(self, seleccion: list[bool] | None = None) -> None:
         """Rehace los tubos a partir de las líneas y actualiza todo lo que se ve.
         `seleccion`: qué tubos se analizan; si es None se conserva lo que había."""
+        self._descartar_resultado("Cambiaron las líneas: hay que contar de nuevo.")
         if seleccion is None:
             seleccion = [c.seleccionado for c in self.canales]
         self.canales = cn.canales_desde_lineas(self.lineas, seleccion)
@@ -443,6 +454,7 @@ class VentanaPrincipal(QMainWindow):
 
     def _on_lineas_modificadas(self, lineas: list[float]) -> None:
         """Llega mientras se arrastra una línea en el video."""
+        self._descartar_resultado("Cambiaron las líneas: hay que contar de nuevo.")
         self.lineas = lineas
         self.canales = cn.canales_desde_lineas(lineas, [c.seleccionado for c in self.canales])
         self.vista.set_canales(self.canales)
@@ -492,26 +504,26 @@ class VentanaPrincipal(QMainWindow):
                     f"El video asociado a esta configuración ({video['archivo']}) no está "
                     "junto al archivo. Ábrelo con «Abrir video…».")
 
-    # --------------------------------------------------------------- análisis
+    # ----------------------------------------------------------------- conteo
     def iniciar_analisis(self, _checked: bool = False) -> None:
         if self._hilo is not None:
             return
         if not self.reproductor.abierto:
-            QMessageBox.information(self, "Sin video", "Abre un video antes de analizar.")
+            QMessageBox.information(self, "Sin video", "Abre un video antes de contar.")
             return
         if not any(c.seleccionado for c in self.canales):
             QMessageBox.information(
-                self, "Sin canales", "Selecciona al menos un canal antes de analizar.")
+                self, "Sin tubos", "Selecciona al menos un tubo antes de contar.")
             return
         try:
             if self._servicio is None:  # el detector se crea una sola vez
                 self._servicio = ServicioConteo(self._fabrica_detector())
         except ErrorAnalisis as e:
-            QMessageBox.warning(self, "No se puede analizar", str(e))
+            QMessageBox.warning(self, "No se puede contar", str(e))
             return
         except Exception:
             log.exception("No se pudo crear el detector")
-            QMessageBox.warning(self, "No se puede analizar", "No se pudo cargar el modelo.")
+            QMessageBox.warning(self, "No se puede contar", "No se pudo cargar el modelo.")
             return
 
         self.reproductor.pausar()
@@ -533,11 +545,14 @@ class VentanaPrincipal(QMainWindow):
         self._hilo.start()
 
     def _set_analizando(self, activo: bool) -> None:
-        """Mientras se analiza no se puede abrir otro video ni editar los canales."""
+        """Mientras se cuenta no se puede abrir otro video, mover líneas ni usar los controles del video."""
         for w in (self.btn_abrir, self.btn_abrir_etapa, self.btn_cargar, self.btn_analizar,
                   self.caja_chips, self.vista):
             w.setEnabled(not activo)
         self.conteo.editable = not activo
+        for b in (self.btn_atras, self.btn_play, self.btn_adelante, self.barra):
+            b.setEnabled(not activo and self.reproductor.abierto)
+        self._on_velocidad(self.reproductor.velocidad)
         self._actualizar_botones_lineas()
         self._actualizar_nav()
         self.btn_pausar.setEnabled(activo)
@@ -573,13 +588,40 @@ class VentanaPrincipal(QMainWindow):
     def _on_terminado(self, resultado) -> None:
         self.resultado = resultado
         self.progreso.setValue(100)
+        self._cuadros_evento = {}
+        for e in resultado.eventos:
+            self._cuadros_evento.setdefault(e.canal, []).append(e.cuadro)
+        for cuadros in self._cuadros_evento.values():
+            cuadros.sort()
         self._mostrar_conteos(resultado.conteos)
-        self.lbl_resultado.setText(f"Análisis terminado. Total: {resultado.total}")
+        self.lbl_resultado.setText(f"Conteo terminado. Total: {resultado.total}")
+        # el video queda en el último cuadro, donde el marcador coincide con el total
+        self.reproductor.ir_a(self.reproductor.total - 1)
+
+    def _conteos_hasta(self, indice: int) -> dict[str, int]:
+        """Peces contados en cada tubo hasta el cuadro `indice` (inclusive)."""
+        conteos = {c.id: 0 for c in self._canales_analizados if c.seleccionado}
+        for tubo, cuadros in self._cuadros_evento.items():
+            if tubo in conteos:
+                conteos[tubo] = bisect.bisect_right(cuadros, indice)
+        return conteos
+
+    def _descartar_resultado(self, motivo: str) -> None:
+        """El resultado ya no corresponde (cambiaron las líneas o el video): se olvida."""
+        if self.resultado is None:
+            return
+        self.resultado = None
+        self._cuadros_evento = {}
+        self.btn_exportar.setEnabled(False)
+        self.progreso.setValue(0)
+        self.lbl_resultado.setText(motivo)
+        self.conteo.set_conteos([None] * len(self.canales))
+        self._actualizar_nav()
 
     def exportar_resultados(self, _checked: bool = False, carpeta: str | None = None) -> None:
         r = self.resultado
         if r is None:
-            QMessageBox.information(self, "Sin resultados", "Analiza un video antes de exportar.")
+            QMessageBox.information(self, "Sin resultados", "Cuenta los peces antes de exportar.")
             return
         if not carpeta:
             carpeta = QFileDialog.getExistingDirectory(self, "Carpeta donde guardar los resultados")
@@ -598,12 +640,12 @@ class VentanaPrincipal(QMainWindow):
     def _on_cancelado(self) -> None:
         self.progreso.setValue(0)
         self.conteo.set_conteos([None] * len(self.canales))
-        self.lbl_resultado.setText("Análisis cancelado.")
+        self.lbl_resultado.setText("Conteo cancelado.")
 
     def _on_error_analisis(self, mensaje: str) -> None:
         self.progreso.setValue(0)
         self.conteo.set_conteos([None] * len(self.canales))
-        QMessageBox.warning(self, "Error en el análisis", mensaje)
+        QMessageBox.warning(self, "Error en el conteo", mensaje)
 
     def _limpiar_hilo(self) -> None:
         # `finished` llega después de terminado / cancelado / error.

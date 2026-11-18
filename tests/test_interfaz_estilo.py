@@ -50,10 +50,10 @@ def test_las_etapas_siguen_el_orden_y_seguir_pide_un_video(app, video):
     assert v.pila.currentIndex() == 1
 
     v.btn_seguir.click()
-    v.btn_seguir.click()
-    assert v._etapa == 3 and not v.btn_seguir.isEnabled()  # la última etapa no tiene «Seguir»
-    v.btn_retroceder.click()
     assert v._etapa == 2 and v.barra_etapas.lbl_paso.text() == "PASO 3 DE 4"
+    assert not v.btn_seguir.isEnabled()  # no se pasa a Exportar sin haber contado
+    v.btn_retroceder.click()
+    assert v._etapa == 1
 
 
 def test_la_velocidad_sube_y_baja_con_limites(app, video):

@@ -43,13 +43,17 @@ Los pesos del modelo (`weights/exp_01.pt`) vienen en el repo.
    selección de tubos. El archivo guarda el nombre del video, no su ruta; al cargar, la
    aplicación lo busca junto al archivo. Los archivos de la versión anterior (tubos
    dibujados a mano) no se pueden cargar: se avisa y hay que marcar los tubos otra vez.
-5. **Analizar video** procesa el video completo en segundo plano. La barra muestra el
-   avance, y se puede **Pausar**, **Reanudar** o **Cancelar**. Mientras se analiza no se
-   puede abrir otro video ni editar las líneas. El conteo de cada tubo sube mientras se
-   analiza. Un tubo sin peces muestra 0. Al terminar, **Exportar resultados…** guarda los
-   archivos en la carpeta que elijas.
+5. **Iniciar conteo** (etapa 3) procesa el video completo en segundo plano. La barra
+   muestra el avance, y se puede **Pausar**, **Reanudar** o **Cancelar**. El conteo de
+   cada tubo sube mientras se cuenta; un tubo sin peces muestra 0. Mientras se cuenta no
+   se puede abrir otro video, mover las líneas ni usar los controles del video. Al
+   terminar, el video queda en el último cuadro y, al reproducirlo o saltar a otro
+   momento, el marcador muestra cuántos peces se habían contado hasta ahí. Si después
+   se mueve una línea o se abre otro video, el resultado se descarta y hay que contar
+   de nuevo. En la etapa 4, **Exportar resultados…** guarda los archivos en la carpeta
+   que elijas.
 
-La primera vez que se analiza, la ventana tarda unos segundos en responder porque carga
+La primera vez que se cuenta, la ventana tarda unos segundos en responder porque carga
 el modelo.
 
 ## Datos y entrenamiento

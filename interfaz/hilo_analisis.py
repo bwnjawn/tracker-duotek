@@ -17,7 +17,7 @@ from src.servicio import AnalisisCancelado, ErrorAnalisis, ServicioConteo
 log = logging.getLogger(__name__)
 
 MENSAJE_ERROR_INESPERADO = (
-    "El análisis se detuvo por un error. Tus canales no se perdieron. "
+    "El conteo se detuvo por un error. Tus tubos no se perdieron. "
     "Puedes volver a intentarlo."
 )
 INTERVALO_PROGRESO = 0.05  # segundos: no se avisa más seguido que esto
