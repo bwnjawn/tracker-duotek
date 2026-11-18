@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import cv2
 import numpy as np
 import pytest
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from interfaz.hilo_analisis import MENSAJE_ERROR_INESPERADO
@@ -81,8 +81,7 @@ def pausa(app, segundos):
 def ventana(app, video, detector):
     v = VentanaPrincipal(fabrica_detector=lambda: detector)
     v.abrir_video(ruta=video)
-    v._agregar_canal(0.0, 0.0, 1.0, 1.0)
-    return v
+    return v  # arranca con 1 línea = 2 tubos; el pez falso pasa por el tubo 1
 
 
 def test_analiza_sin_congelar_la_ventana(app, video):
@@ -97,19 +96,21 @@ def test_analiza_sin_congelar_la_ventana(app, video):
     reloj.stop()
 
     assert len(latidos) >= 10, f"la ventana se congeló: solo {len(latidos)} latidos"
-    assert v.resultado.conteos == {"tubo_1": 1}
+    assert v.resultado.conteos == {"tubo_1": 1, "tubo_2": 0}
     assert v.progreso.value() == 100 and "Total: 1" in v.lbl_resultado.text()
+    assert v.conteo.valor(0) == "1" and v.conteo.valor(1) == "0" and v.conteo.total() == "1"
 
 
 def test_bloquea_la_edicion_mientras_analiza(app, video):
     v = ventana(app, video, DetectorLento())
     v.btn_analizar.click()
-    assert not v.btn_abrir.isEnabled() and not v.btn_dibujar.isEnabled()
-    assert not v.btn_quitar.isEnabled() and not v.lista.isEnabled() and not v.vista.isEnabled()
+    assert not v.btn_abrir.isEnabled() and not v.btn_agregar.isEnabled()
+    assert not v.btn_quitar_linea.isEnabled() and not v.conteo.editable and not v.vista.isEnabled()
+    assert not v.btn_izq.isEnabled() and not v.caja_chips.isEnabled()
     assert v.btn_pausar.isEnabled() and v.btn_cancelar.isEnabled()
 
     esperar(app, lambda: v._hilo is None)
-    assert v.btn_abrir.isEnabled() and v.btn_dibujar.isEnabled() and v.lista.isEnabled()
+    assert v.btn_abrir.isEnabled() and v.btn_agregar.isEnabled() and v.conteo.editable
     assert not v.btn_pausar.isEnabled() and not v.btn_cancelar.isEnabled()
 
 
@@ -124,7 +125,7 @@ def test_cancelar(app, video):
 
     v.btn_analizar.click()  # se puede volver a analizar sin arrastrar nada
     esperar(app, lambda: v._hilo is None)
-    assert v.resultado.conteos == {"tubo_1": 1}
+    assert v.resultado.conteos == {"tubo_1": 1, "tubo_2": 0}
 
 
 def test_pausar_y_reanudar(app, video):
@@ -140,7 +141,7 @@ def test_pausar_y_reanudar(app, video):
 
     v.btn_pausar.click()
     esperar(app, lambda: v._hilo is None)
-    assert v.resultado.conteos == {"tubo_1": 1}
+    assert v.resultado.conteos == {"tubo_1": 1, "tubo_2": 0}
 
 
 def test_sin_video_o_sin_canales_avisa(app, video, avisos):
@@ -149,8 +150,10 @@ def test_sin_video_o_sin_canales_avisa(app, video, avisos):
     assert "Abre un video" in avisos[-1] and v._hilo is None
 
     v.abrir_video(ruta=video)
+    for i in range(v.conteo.cantidad()):  # se desmarcan todos los tubos
+        v.conteo.marcar(i, False)
     v.btn_analizar.click()
-    assert "al menos un canal" in avisos[-1] and v._hilo is None
+    assert "al menos un tubo" in avisos[-1] and v._hilo is None
 
 
 def test_falla_inesperada_no_muestra_traceback(app, video, avisos):
@@ -159,7 +162,7 @@ def test_falla_inesperada_no_muestra_traceback(app, video, avisos):
     esperar(app, lambda: v._hilo is None)
     assert avisos == [MENSAJE_ERROR_INESPERADO]
     assert v.resultado is None and v.btn_analizar.isEnabled()
-    assert len(v.canales) == 1  # los canales no se perdieron
+    assert len(v.canales) == 2  # los tubos no se perdieron
 
 
 def test_pesos_que_faltan_avisan_claro(app, video, avisos, monkeypatch):
@@ -168,7 +171,6 @@ def test_pesos_que_faltan_avisan_claro(app, video, avisos, monkeypatch):
     monkeypatch.setattr(vp, "PESOS_DEFECTO", vp.Path("no_existe/exp_01.pt"))
     v = VentanaPrincipal()  # fábrica real, sin pesos
     v.abrir_video(ruta=video)
-    v._agregar_canal(0.0, 0.0, 1.0, 1.0)
     v.btn_analizar.click()
     assert "archivo de pesos" in avisos[-1] and v._hilo is None
 
@@ -180,3 +182,167 @@ def test_cerrar_la_ventana_durante_el_analisis(app, video):
     hilo = v._hilo
     v.close()
     assert hilo.isFinished()
+
+
+def test_exportar_resultados(app, video, avisos, tmp_path):
+    v = ventana(app, video, DetectorLento())
+    assert not v.btn_exportar.isEnabled()  # sin análisis no hay nada que exportar
+
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+    assert v.btn_exportar.isEnabled()
+
+    salida = tmp_path / "salida"
+    v.exportar_resultados(carpeta=str(salida))
+    for nombre in ("resultados.json", "detecciones.csv", "eventos.csv"):
+        assert (salida / nombre).exists()
+    assert '"total": 1' in (salida / "resultados.json").read_text(encoding="utf-8")
+    assert str(salida) in avisos[-1]  # el aviso dice dónde quedaron los archivos
+
+
+def test_cancelar_deja_el_boton_exportar_apagado(app, video):
+    v = ventana(app, video, DetectorLento(demora=0.05))
+    v.btn_analizar.click()
+    esperar(app, lambda: v.progreso.value() > 0)
+    v.btn_cancelar.click()
+    esperar(app, lambda: v._hilo is None)
+    assert not v.btn_exportar.isEnabled()
+
+
+def test_muestra_el_conteo_mientras_analiza(app, video):
+    v = ventana(app, video, DetectorLento())
+    v.btn_analizar.click()
+    assert "Contando" in v.lbl_resultado.text()
+    assert v.conteo.valor(0) == "0" and v.conteo.valor(1) == "0"  # cada tubo parte en 0
+
+    # el pez cruza la línea a mitad del video: el 1 aparece antes de que termine
+    esperar(app, lambda: "Contando" in v.lbl_resultado.text() and v.conteo.valor(0) == "1")
+    esperar(app, lambda: v._hilo is None)
+    assert "Conteo terminado" in v.lbl_resultado.text() and "Total: 1" in v.lbl_resultado.text()
+
+
+def test_el_boton_se_llama_iniciar_conteo(app):
+    assert VentanaPrincipal().btn_analizar.text() == "Iniciar conteo"
+
+
+def test_seguir_en_la_etapa_de_conteo_espera_al_resultado(app, video):
+    v = ventana(app, video, DetectorLento())
+    v._ir_a_etapa(2)
+    assert not v.btn_seguir.isEnabled()  # todavía no se ha contado
+
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+    assert v.btn_seguir.isEnabled()
+    v.btn_seguir.click()
+    assert v._etapa == 3
+
+
+def test_los_controles_del_video_se_apagan_mientras_se_cuenta(app, video):
+    v = ventana(app, video, DetectorLento())
+    assert v.btn_play.isEnabled() and v.barra.isEnabled() and v.btn_vel_mas.isEnabled()
+    v.btn_analizar.click()
+    for b in (v.btn_atras, v.btn_play, v.btn_adelante, v.barra, v.btn_vel_mas):
+        assert not b.isEnabled()
+    v._alternar_reproduccion()  # la barra espaciadora tampoco hace nada
+    assert not v.reproductor.reproduciendo
+
+    esperar(app, lambda: v._hilo is None)
+    for b in (v.btn_atras, v.btn_play, v.btn_adelante, v.barra, v.btn_vel_mas):
+        assert b.isEnabled()
+
+
+def test_despues_de_contar_el_marcador_sigue_al_video(app, video):
+    v = ventana(app, video, DetectorLento())
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+    # al terminar el video queda en el último cuadro y el marcador muestra el total
+    assert v.reproductor.indice == CUADROS - 1 and v.conteo.valor(0) == "1"
+
+    v.reproductor.ir_a(0)  # al volver al principio todavía no se había contado nada
+    assert v.conteo.valor(0) == "0" and v.conteo.total() == "0"
+    v.reproductor.ir_a(CUADROS - 1)
+    assert v.conteo.valor(0) == "1" and v.conteo.total() == "1"
+    assert v.conteo.valor(1) == "0"  # el otro tubo no tuvo peces
+
+
+def test_mover_una_linea_descarta_el_resultado(app, video):
+    v = ventana(app, video, DetectorLento())
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+    assert v.resultado is not None and v.btn_exportar.isEnabled()
+
+    v.btn_der.click()  # cambia la posición de la línea
+    assert v.resultado is None and not v.btn_exportar.isEnabled()
+    assert "contar de nuevo" in v.lbl_resultado.text()
+    assert v.conteo.valor(0) == "—"
+    v._ir_a_etapa(2)
+    assert not v.btn_seguir.isEnabled()
+
+    v.btn_analizar.click()  # se puede volver a contar
+    esperar(app, lambda: v._hilo is None)
+    assert v.resultado is not None
+
+
+def test_abrir_otro_video_descarta_el_resultado(app, video, tmp_path):
+    v = ventana(app, video, DetectorLento())
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+    assert v.resultado is not None
+
+    v.abrir_video(ruta=video)  # el mismo video: el resultado sigue valiendo
+    assert v.resultado is not None
+
+    otro = tmp_path / "otro.mp4"
+    w = cv2.VideoWriter(str(otro), cv2.VideoWriter_fourcc(*"mp4v"), 20, (320, 240))
+    for _ in range(4):
+        w.write(np.zeros((240, 320, 3), np.uint8))
+    w.release()
+    v.abrir_video(ruta=str(otro))
+    assert v.resultado is None and "otro video" in v.lbl_resultado.text()
+
+
+def test_el_video_se_ve_mientras_se_cuenta(app, video):
+    v = ventana(app, video, DetectorLento())
+    llegaron = []
+    original = v.vista.set_marcas
+    v.vista.set_marcas = lambda marcas: (llegaron.append(list(marcas)), original(marcas))[1]
+
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+    antes_del_final = llegaron[:-1]  # lo último es el salto al final, al terminar
+    assert len(antes_del_final) >= 3, "durante el conteo debieron llegar varios fotogramas"
+    pez = [m for marcas in antes_del_final for m in marcas]
+    assert pez and all(m.id == 7 for m in pez)  # el pez falso, con su caja normalizada
+    assert pez[0].caja[0] == 30 / 320
+
+
+def test_despues_de_contar_el_video_muestra_los_peces_y_cuando_se_cuentan(app, video):
+    v = ventana(app, video, DetectorLento())
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+
+    v.reproductor.ir_a(1)
+    (m,) = v.vista._marcas
+    assert m.id == 7 and not m.contado  # todavía no cruza la línea
+    v.reproductor.ir_a(CUADROS - 1)
+    (m,) = v.vista._marcas
+    assert m.contado and len(m.ruta) > 1  # ya cruzó, y tiene ruta
+
+
+def test_las_capas_se_prenden_y_se_apagan(app):
+    v = VentanaPrincipal()
+    assert all(v.vista.capas.values()) and set(v.btn_capas) == {"cajas", "ids", "ruta", "lineas"}
+    v.btn_capas["ids"].click()
+    assert not v.vista.capas["ids"] and v.vista.capas["cajas"]
+    v.btn_capas["ids"].click()
+    assert v.vista.capas["ids"]
+
+
+def test_descartar_el_resultado_borra_los_peces_dibujados(app, video):
+    v = ventana(app, video, DetectorLento())
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+    v.reproductor.ir_a(2)
+    assert v.vista._marcas
+    v.btn_der.click()  # mover una línea descarta el resultado
+    assert v.vista._marcas == []
