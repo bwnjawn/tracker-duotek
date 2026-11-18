@@ -390,8 +390,11 @@ class VentanaPrincipal(QMainWindow):
         self.lbl_resultado.setText("")
         self.progreso.setRange(0, 100)
         self.progreso.setValue(0)
+        # desde el primer momento cada tubo elegido aparece con 0
+        self._mostrar_conteos({c.id: 0 for c in self.canales if c.seleccionado})
         self._hilo = HiloAnalisis(self._servicio, self.reproductor.ruta, self.canales, self)
         self._hilo.progreso.connect(self._on_progreso)
+        self._hilo.conteos.connect(self._mostrar_conteos)
         self._hilo.terminado.connect(self._on_terminado)
         self._hilo.cancelado.connect(self._on_cancelado)
         self._hilo.error.connect(self._on_error_analisis)
@@ -434,13 +437,19 @@ class VentanaPrincipal(QMainWindow):
         if total > 0:
             self.progreso.setValue(min(100, hechos * 100 // total))
 
+    def _texto_conteos(self, conteos: dict[str, int]) -> str:
+        nombres = {c.id: c.nombre for c in self._canales_analizados}
+        partes = [f"{nombres.get(cid, cid)}: {n}" for cid, n in conteos.items()]
+        return "\n".join(partes) + f"\nTotal: {sum(conteos.values())}"
+
+    def _mostrar_conteos(self, conteos: dict[str, int]) -> None:
+        """Conteo por tubo mientras el análisis avanza."""
+        self.lbl_resultado.setText("Contando…\n" + self._texto_conteos(conteos))
+
     def _on_terminado(self, resultado) -> None:
         self.resultado = resultado
         self.progreso.setValue(100)
-        nombres = {c.id: c.nombre for c in self.canales}
-        partes = [f"{nombres.get(cid, cid)}: {n}" for cid, n in resultado.conteos.items()]
-        self.lbl_resultado.setText("Análisis terminado.\n" + "\n".join(partes)
-                                   + f"\nTotal: {resultado.total}")
+        self.lbl_resultado.setText("Análisis terminado.\n" + self._texto_conteos(resultado.conteos))
 
     def exportar_resultados(self, _checked: bool = False, carpeta: str | None = None) -> None:
         r = self.resultado

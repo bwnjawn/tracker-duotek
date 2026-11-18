@@ -205,3 +205,14 @@ def test_cancelar_deja_el_boton_exportar_apagado(app, video):
     v.btn_cancelar.click()
     esperar(app, lambda: v._hilo is None)
     assert not v.btn_exportar.isEnabled()
+
+
+def test_muestra_el_conteo_mientras_analiza(app, video):
+    v = ventana(app, video, DetectorLento())
+    v.btn_analizar.click()
+    assert "Contando" in v.lbl_resultado.text() and "Tubo 1: 0" in v.lbl_resultado.text()
+
+    # el pez cruza la línea a mitad del video: el 1 aparece antes de que termine
+    esperar(app, lambda: "Contando" in v.lbl_resultado.text() and "Tubo 1: 1" in v.lbl_resultado.text())
+    esperar(app, lambda: v._hilo is None)
+    assert "Análisis terminado" in v.lbl_resultado.text() and "Total: 1" in v.lbl_resultado.text()
