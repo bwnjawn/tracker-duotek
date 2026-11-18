@@ -180,3 +180,28 @@ def test_cerrar_la_ventana_durante_el_analisis(app, video):
     hilo = v._hilo
     v.close()
     assert hilo.isFinished()
+
+
+def test_exportar_resultados(app, video, avisos, tmp_path):
+    v = ventana(app, video, DetectorLento())
+    assert not v.btn_exportar.isEnabled()  # sin análisis no hay nada que exportar
+
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+    assert v.btn_exportar.isEnabled()
+
+    salida = tmp_path / "salida"
+    v.exportar_resultados(carpeta=str(salida))
+    for nombre in ("resultados.json", "detecciones.csv", "eventos.csv"):
+        assert (salida / nombre).exists()
+    assert '"total": 1' in (salida / "resultados.json").read_text(encoding="utf-8")
+    assert str(salida) in avisos[-1]  # el aviso dice dónde quedaron los archivos
+
+
+def test_cancelar_deja_el_boton_exportar_apagado(app, video):
+    v = ventana(app, video, DetectorLento(demora=0.05))
+    v.btn_analizar.click()
+    esperar(app, lambda: v.progreso.value() > 0)
+    v.btn_cancelar.click()
+    esperar(app, lambda: v._hilo is None)
+    assert not v.btn_exportar.isEnabled()

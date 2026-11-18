@@ -1,6 +1,7 @@
 """Ventana principal: carga/reproducción de video + selección de canales."""
 from __future__ import annotations
 
+import copy
 import logging
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.canales import Canal
+from src.exportador import exportar
 from src.servicio import ErrorAnalisis, ServicioConteo
 
 from . import canales as cn
@@ -53,6 +55,7 @@ class VentanaPrincipal(QMainWindow):
         self._hilo: HiloAnalisis | None = None
         self._pausado = False
         self.resultado = None  # ResultadoAnalisis del último análisis completo
+        self._canales_analizados: list[Canal] = []  # los canales tal como estaban al analizar
         self.reproductor = Reproductor(self)
         self.canales: list[Canal] = []
         self.vista = VistaVideo()
@@ -110,6 +113,8 @@ class VentanaPrincipal(QMainWindow):
         self.btn_cancelar = QPushButton("Cancelar")
         self.btn_pausar.setEnabled(False)
         self.btn_cancelar.setEnabled(False)
+        self.btn_exportar = QPushButton("Exportar resultados…")
+        self.btn_exportar.setEnabled(False)  # se habilita al terminar un análisis
         self.progreso = QProgressBar()
         self.progreso.setRange(0, 100)
         self.lbl_resultado = QLabel("")
@@ -130,6 +135,7 @@ class VentanaPrincipal(QMainWindow):
         der.addWidget(self.btn_analizar)
         der.addLayout(fila_analisis)
         der.addWidget(self.progreso)
+        der.addWidget(self.btn_exportar)
         der.addWidget(self.lbl_resultado)
         panel = QWidget()
         panel.setLayout(der)
@@ -170,6 +176,7 @@ class VentanaPrincipal(QMainWindow):
         self.btn_analizar.clicked.connect(self.iniciar_analisis)
         self.btn_pausar.clicked.connect(self._alternar_pausa)
         self.btn_cancelar.clicked.connect(self._cancelar_analisis)
+        self.btn_exportar.clicked.connect(self.exportar_resultados)
 
     # ------------------------------------------------------------------ video
     def abrir_video(self, _checked: bool = False, ruta: str | None = None) -> None:
@@ -379,6 +386,7 @@ class VentanaPrincipal(QMainWindow):
 
         self.reproductor.pausar()
         self.resultado = None
+        self._canales_analizados = copy.deepcopy(self.canales)
         self.lbl_resultado.setText("")
         self.progreso.setRange(0, 100)
         self.progreso.setValue(0)
@@ -401,6 +409,7 @@ class VentanaPrincipal(QMainWindow):
             w.setEnabled(not activo)
         self.btn_pausar.setEnabled(activo)
         self.btn_cancelar.setEnabled(activo)
+        self.btn_exportar.setEnabled(not activo and self.resultado is not None)
         if not activo:
             self._pausado = False
             self.btn_pausar.setText("Pausar")
@@ -432,6 +441,25 @@ class VentanaPrincipal(QMainWindow):
         partes = [f"{nombres.get(cid, cid)}: {n}" for cid, n in resultado.conteos.items()]
         self.lbl_resultado.setText("Análisis terminado.\n" + "\n".join(partes)
                                    + f"\nTotal: {resultado.total}")
+
+    def exportar_resultados(self, _checked: bool = False, carpeta: str | None = None) -> None:
+        r = self.resultado
+        if r is None:
+            QMessageBox.information(self, "Sin resultados", "Analiza un video antes de exportar.")
+            return
+        if not carpeta:
+            carpeta = QFileDialog.getExistingDirectory(self, "Carpeta donde guardar los resultados")
+        if not carpeta:
+            return
+        try:
+            ruta = exportar(
+                carpeta, r.video, r.fps, r.ancho, r.alto, self._canales_analizados,
+                r.conteos, r.eventos, r.filas, modelo=PESOS_DEFECTO.name,
+            )
+        except OSError as e:
+            QMessageBox.warning(self, "Error", f"No se pudo exportar:\n{e}")
+            return
+        QMessageBox.information(self, "Resultados exportados", f"Archivos guardados en:\n{ruta.parent}")
 
     def _on_cancelado(self) -> None:
         self.progreso.setValue(0)
