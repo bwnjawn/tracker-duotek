@@ -6,16 +6,21 @@ import numpy as np
 from PySide6.QtCore import QObject, QTimer, Signal
 
 
+VELOCIDADES = (0.25, 0.5, 1.0, 1.5, 2.0, 4.0)
+
+
 class Reproductor(QObject):
     fotograma_cambiado = Signal(int, object)  # índice, ndarray BGR
     estado_cambiado = Signal(bool)  # True = reproduciendo
     video_abierto = Signal(str)  # ruta
+    velocidad_cambiada = Signal(float)  # 1.0 = velocidad normal
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._cap: cv2.VideoCapture | None = None
         self._ruta = ""
         self._indice = -1  # índice del último fotograma mostrado
+        self._pos_velocidad = VELOCIDADES.index(1.0)
         self.total = 0
         self.fps = 30.0
         self.ancho = 0
@@ -31,6 +36,10 @@ class Reproductor(QObject):
     @property
     def indice(self) -> int:
         return self._indice
+
+    @property
+    def velocidad(self) -> float:
+        return VELOCIDADES[self._pos_velocidad]
 
     @property
     def abierto(self) -> bool:
@@ -61,12 +70,25 @@ class Reproductor(QObject):
         self.ancho = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.alto = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self._indice = -1
-        self._timer.setInterval(max(1, round(1000 / self.fps)))
+        self._ajustar_intervalo()
         self.video_abierto.emit(ruta)
         self.ir_a(0)
         return True
 
     # -- control ------------------------------------------------------------
+    def _ajustar_intervalo(self) -> None:
+        """Más velocidad = menos tiempo entre un fotograma y el siguiente."""
+        self._timer.setInterval(max(1, round(1000 / (self.fps * self.velocidad))))
+
+    def cambiar_velocidad(self, paso: int) -> None:
+        """Sube (+1) o baja (-1) un escalón de la lista VELOCIDADES."""
+        nueva = min(max(self._pos_velocidad + paso, 0), len(VELOCIDADES) - 1)
+        if nueva == self._pos_velocidad:
+            return
+        self._pos_velocidad = nueva
+        self._ajustar_intervalo()
+        self.velocidad_cambiada.emit(self.velocidad)
+
     def reproducir(self) -> None:
         if not self.abierto:
             return

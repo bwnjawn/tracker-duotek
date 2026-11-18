@@ -33,20 +33,30 @@ Los pesos del modelo (`weights/exp_01.pt`) vienen en el repo.
 1. **Abrir video…** y elegir un `.mp4`, `.avi`, `.mov` o `.mkv`. Con la barra, los
    botones `-1` y `+1` y la barra espaciadora se reproduce, se pausa y se avanza cuadro
    a cuadro.
-2. **Marcar canal (dibujar)** y arrastrar el mouse sobre el video para dibujar un tubo.
-   Con ese botón desactivado, un tubo se mueve arrastrándolo y se cambia su tamaño con
-   las asas o con las casillas X, Y, Ancho y Alto. La línea amarilla es la línea de
-   conteo: queda a mitad de la altura del tubo.
-3. En la lista de la derecha se marcan o desmarcan los canales a contar.
-4. **Guardar configuración…** y **Cargar configuración…** conservan los tubos y su
-   selección. El archivo guarda el nombre del video, no su ruta; al cargar, la aplicación
-   lo busca junto al archivo de canales.
-5. **Analizar video** procesa el video completo en segundo plano. La barra muestra el
-   avance, y se puede **Pausar**, **Reanudar** o **Cancelar**. Mientras se analiza no se
-   puede abrir otro video ni editar los canales. Al terminar se muestra el conteo de cada
-   canal y el total. Un canal sin peces muestra 0.
+2. Los tubos se separan con líneas verticales: N líneas dan N+1 tubos (los bordes del
+   video cuentan). La ventana arranca con 1 línea (2 tubos). Arrastra una línea sobre el
+   video, o elígela (L1, L2…) y muévela con ◀ y ▶. **Nueva línea** y **Quitar línea**
+   reparten todas las líneas a la misma distancia. La línea amarilla es la línea de
+   conteo y está fija a mitad de la altura. Se admiten hasta 7 líneas.
+3. En la lista de la derecha se marcan o desmarcan los tubos a contar.
+4. **Guardar config** y **Cargar config** conservan las líneas y la
+   selección de tubos. El archivo guarda el nombre del video, no su ruta; al cargar, la
+   aplicación lo busca junto al archivo. Los archivos de la versión anterior (tubos
+   dibujados a mano) no se pueden cargar: se avisa y hay que marcar los tubos otra vez.
+5. **Iniciar conteo** (etapa 3) procesa el video completo en segundo plano. La barra
+   muestra el avance, y se puede **Pausar**, **Reanudar** o **Cancelar**. El conteo de
+   cada tubo sube mientras se cuenta; un tubo sin peces muestra 0. El video se muestra con
+   lo que ve el modelo: caja y número (ID) de cada pez, y su ruta. Los botones **Cajas**,
+   **IDs**, **Ruta** y **Líneas** (encima del video) muestran u ocultan cada capa; la caja
+   se pone verde cuando el pez ya se contó. Mientras se cuenta no
+   se puede abrir otro video, mover las líneas ni usar los controles del video. Al
+   terminar, el video queda en el último cuadro y, al reproducirlo o saltar a otro
+   momento, el marcador muestra cuántos peces se habían contado hasta ahí. Si después
+   se mueve una línea o se abre otro video, el resultado se descarta y hay que contar
+   de nuevo. En la etapa 4, **Exportar resultados…** guarda los archivos en la carpeta
+   que elijas.
 
-La primera vez que se analiza, la ventana tarda unos segundos en responder porque carga
+La primera vez que se cuenta, la ventana tarda unos segundos en responder porque carga
 el modelo.
 
 ## Datos y entrenamiento
@@ -97,19 +107,26 @@ src/         Módulos de IA y lógica
   servicio.py    Analiza un video completo con progreso, pausa y cancelación
   contar_video.py, exportador.py, eval_conteo.py, entrenar.py   Otras herramientas
                      (entrenar.py entrena con un data.yaml cualquiera)
-interfaz/    Ventana en PySide6 
-  ventana_principal.py, vista_video.py, reproductor.py
-  hilo_analisis.py   Ejecuta el análisis en un hilo aparte
-  canales.py         Traduce entre los rectángulos de la ventana y el Canal de src/
+interfaz/    Ventana en PySide6
+  ventana_principal.py   Ventana: video, asistente de 4 etapas y marcador de conteo
+  vista_video.py         Dibuja el video, las líneas de los tubos y las capas (cajas, IDs, ruta)
+  reproductor.py         Reproducción del video, con velocidad
+  hilo_analisis.py       Cuenta en un hilo aparte y envía conteos y fotogramas
+  canales.py             Traduce entre las líneas verticales de la ventana y el Canal de src/
+  capas.py               Marcas que se dibujan sobre cada pez (lógica pura)
+  panel_conteo.py        Marcador por tubo y barra de etapas
+  estilo.py, iconos.py   Paleta de Duotek, hoja de estilo (QSS) e iconos
+  recursos/              Logo de Duotek
 scripts/     Preparación del dataset (reparto train/val/test y validación)
 tests/       Pruebas automáticas
 weights/     Pesos del modelo (solo exp_01.pt)
 configs/     Configs de entrenamiento para los datos de Duotek
 lab15/       Código, configs, logs y notebook del Lab 15 (histórico, no se usa)
-docs/        Origen y cambios del código reutilizado del Lab 15
+docs/        Origen del código del Lab 15 (origen_y_cambios_lab15.md) y cambios de la
+             interfaz (cambios_interfaz.md)
 ```
 
-Flujo al analizar: la ventana lanza un hilo (`HiloAnalisis`), que llama a
+Flujo al contar: la ventana lanza un hilo (`HiloAnalisis`), que llama a
 `ServicioConteo`. El servicio pasa cada cuadro al `Detector`, filtra las detecciones que
 caen dentro de un canal seleccionado y se las entrega al `ContadorCanales`. El hilo solo
 se comunica con la ventana por señales.
