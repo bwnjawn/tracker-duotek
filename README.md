@@ -30,9 +30,14 @@ Los pesos del modelo (`weights/exp_01.pt`) vienen en el repo.
 
 ## Cómo se usa
 
-1. **Abrir video…** y elegir un `.mp4`, `.avi`, `.mov` o `.mkv`. Con la barra, los
-   botones `-1` y `+1` y la barra espaciadora se reproduce, se pausa y se avanza cuadro
-   a cuadro.
+El video va a la izquierda y, a la derecha, un asistente de 4 etapas: **Video**, **Líneas**,
+**Conteo** y **Exportar**. Los botones **Retroceder** y **Seguir** cambian de etapa. Arriba
+a la derecha se ve siempre el conteo de cada tubo y el total.
+
+1. **Abrir video…** y elegir un `.mp4`, `.avi`, `.mov` o `.mkv`. Al abrirlo se pasa solo a
+   la etapa 2. Con la barra de tiempo, los botones de fotograma anterior y siguiente, la
+   barra espaciadora y los botones `−` y `+` de velocidad (de 0.25× a 4×) se reproduce, se
+   pausa y se avanza cuadro a cuadro.
 2. Los tubos se separan con líneas verticales: N líneas dan N+1 tubos (los bordes del
    video cuentan). La ventana arranca con 1 línea (2 tubos). Arrastra una línea sobre el
    video, o elígela (L1, L2…) y muévela con ◀ y ▶. **Nueva línea** y **Quitar línea**
