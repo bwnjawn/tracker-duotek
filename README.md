@@ -107,19 +107,26 @@ src/         Módulos de IA y lógica
   servicio.py    Analiza un video completo con progreso, pausa y cancelación
   contar_video.py, exportador.py, eval_conteo.py, entrenar.py   Otras herramientas
                      (entrenar.py entrena con un data.yaml cualquiera)
-interfaz/    Ventana en PySide6 
-  ventana_principal.py, vista_video.py, reproductor.py
-  hilo_analisis.py   Ejecuta el análisis en un hilo aparte
-  canales.py         Traduce entre los rectángulos de la ventana y el Canal de src/
+interfaz/    Ventana en PySide6
+  ventana_principal.py   Ventana: video, asistente de 4 etapas y marcador de conteo
+  vista_video.py         Dibuja el video, las líneas de los tubos y las capas (cajas, IDs, ruta)
+  reproductor.py         Reproducción del video, con velocidad
+  hilo_analisis.py       Cuenta en un hilo aparte y envía conteos y fotogramas
+  canales.py             Traduce entre las líneas verticales de la ventana y el Canal de src/
+  capas.py               Marcas que se dibujan sobre cada pez (lógica pura)
+  panel_conteo.py        Marcador por tubo y barra de etapas
+  estilo.py, iconos.py   Paleta de Duotek, hoja de estilo (QSS) e iconos
+  recursos/              Logo de Duotek
 scripts/     Preparación del dataset (reparto train/val/test y validación)
 tests/       Pruebas automáticas
 weights/     Pesos del modelo (solo exp_01.pt)
 configs/     Configs de entrenamiento para los datos de Duotek
 lab15/       Código, configs, logs y notebook del Lab 15 (histórico, no se usa)
-docs/        Origen y cambios del código reutilizado del Lab 15
+docs/        Origen del código del Lab 15 (origen_y_cambios_lab15.md) y cambios de la
+             interfaz (cambios_interfaz.md)
 ```
 
-Flujo al analizar: la ventana lanza un hilo (`HiloAnalisis`), que llama a
+Flujo al contar: la ventana lanza un hilo (`HiloAnalisis`), que llama a
 `ServicioConteo`. El servicio pasa cada cuadro al `Detector`, filtra las detecciones que
 caen dentro de un canal seleccionado y se las entrega al `ContadorCanales`. El hilo solo
 se comunica con la ventana por señales.
