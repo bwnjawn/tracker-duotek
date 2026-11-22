@@ -9,12 +9,14 @@ Responde dos preguntas con datos reales, sin tocar el entrenamiento:
 El detector se ejecuta una sola vez; luego las mismas detecciones alimentan a todos los seguidores,
 así la comparación es justa y rápida.
 
-Uso (desde la raíz del repo, en tu PC con los datos):
-    uv run python -m src.comparar_seguidores --pesos pesos/exp_01.pt \
-        --fuente RUTA/seq_0003/images --etiquetas RUTA/seq_0003/labels \
+Uso (desde la raíz del repo, en tu PC con los datos), directo desde el .tar entregado:
+    uv run python -m src.comparar_seguidores --pesos weights/exp_01.pt \
+        --secuencia data/seq_0003.tar \
         --canales canales.json --esperados 10 --salida diagnostico/comparacion_seq3
 
-  --fuente   carpeta de imágenes (orden alfabético = orden temporal) o un video.
+  --secuencia  .tar / .zip / carpeta con images/ y labels/ (ignora los archivos "._*" de Mac).
+               Reemplaza a --fuente y --etiquetas.
+  --fuente   (alternativa) carpeta de imágenes o un video.
   --etiquetas  (opcional) carpeta con un .txt YOLO por imagen, mismo nombre. Activa el oráculo.
   --esperados  conteo real total de la secuencia (para calcular el error).
 
@@ -25,7 +27,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
+import tarfile
+import tempfile
 import types
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -147,14 +153,19 @@ def candidatos() -> list[Candidato]:
 
 # ---------------------------------------------------------------------------- evaluación
 def contar(cand: Candidato, cuadros: list, canales: list[Canal], ancho: int, alto: int,
-           compensar: int = 1) -> dict:
-    """Pasa las detecciones por un seguidor y el contador. Devuelve métricas agregadas."""
+           compensar: int = 1, numeros: list[int] | None = None) -> dict:
+    """Pasa las detecciones por un seguidor y el contador. Devuelve métricas agregadas.
+
+    numeros: número real de cada cuadro (el del nombre del archivo). Si faltan cuadros en la
+    secuencia, el seguidor de centros lo sabe (el tiempo entre dos imágenes ya no es 1)."""
+    numeros = numeros if numeros is not None else list(range(len(cuadros)))
     seg = cand.fabrica()
     cont = ContadorCanales(canales, min_hits=cand.min_hits, compensar_confirmacion=compensar)
     ids_vistos: set[int] = set()
     sin_id = total = 0
     for i, cajas in enumerate(cuadros):
-        ids = seg.ids(cajas, i, ancho, alto) if len(cajas) else seg.ids(CajasSimples([], []), i, ancho, alto)
+        n = numeros[i]
+        ids = seg.ids(cajas, n, ancho, alto) if len(cajas) else seg.ids(CajasSimples([], []), n, ancho, alto)
         pts = []
         for (x, y, _w, _h), tid in zip(cajas.xywh, ids):
             total += 1
@@ -163,15 +174,16 @@ def contar(cand: Candidato, cuadros: list, canales: list[Canal], ancho: int, alt
                 continue
             ids_vistos.add(tid)
             pts.append((tid, float(x) / ancho, float(y) / alto))
-        cont.actualizar(i, i / 10, pts)
+        cont.actualizar(n, n / 10, pts)
     return {"contados": cont.total, "por_canal": dict(cont.conteos), "ids_distintos": len(ids_vistos),
             "detecciones": total, "detecciones_sin_id": sin_id}
 
 
-def evaluar(cuadros: list, canales: list[Canal], ancho: int, alto: int, esperados: int | None) -> list[dict]:
+def evaluar(cuadros: list, canales: list[Canal], ancho: int, alto: int, esperados: int | None,
+            numeros: list[int] | None = None) -> list[dict]:
     filas = []
     for cand in candidatos():
-        r = contar(cand, cuadros, canales, ancho, alto)
+        r = contar(cand, cuadros, canales, ancho, alto, numeros=numeros)
         err = None if not esperados else (r["contados"] - esperados) / esperados
         filas.append({"seguidor": cand.nombre, **r, "esperados": esperados, "error_rel": err})
     return filas
@@ -187,12 +199,53 @@ def imprimir(titulo: str, filas: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------- entrada
+def es_basura(nombre: str) -> bool:
+    """Archivos que macOS agrega al comprimir ("._x", ".DS_Store", carpeta __MACOSX)."""
+    return nombre.startswith("._") or nombre == ".DS_Store" or "__MACOSX" in nombre.split("/")
+
+
+def numero_de_cuadro(nombre: str, respaldo: int) -> int:
+    """Número al final del nombre (seq_0003_00298 -> 298); si no hay, el orden de lectura."""
+    m = re.search(r"(\d+)$", nombre)
+    return int(m.group(1)) if m else respaldo
+
+
+def preparar_secuencia(ruta: Path, temporal: Path) -> tuple[Path, Path | None]:
+    """Devuelve (carpeta de imágenes, carpeta de etiquetas|None) desde un .tar, .zip o carpeta.
+
+    Del comprimido solo se extraen imágenes y etiquetas reales (sin archivos "._" de Mac)."""
+    if ruta.is_dir():
+        raiz = ruta
+    else:
+        raiz = temporal / "secuencia"
+        raiz.mkdir(parents=True, exist_ok=True)
+        if tarfile.is_tarfile(ruta):
+            with tarfile.open(ruta) as t:
+                for m in t.getmembers():
+                    if m.isfile() and not es_basura(m.name) and not es_basura(Path(m.name).name):
+                        m.name = m.name.replace("\\", "/")
+                        t.extract(m, raiz, filter="data")
+        elif zipfile.is_zipfile(ruta):
+            with zipfile.ZipFile(ruta) as z:
+                for n in z.namelist():
+                    if not n.endswith("/") and not es_basura(n) and not es_basura(Path(n).name):
+                        z.extract(n, raiz)
+        else:
+            raise SystemExit(f"{ruta} no es .tar, .zip ni carpeta")
+    imagenes = next((d for d in sorted(raiz.rglob("images")) if d.is_dir()), None)
+    if imagenes is None:
+        raise SystemExit(f"No encontré una carpeta 'images' dentro de {ruta}")
+    etiquetas = next((d for d in sorted(raiz.rglob("labels")) if d.is_dir()), None)
+    return imagenes, etiquetas
+
+
 def cargar_fuente(fuente: Path):
     """Devuelve (lista de nombres, generador de imágenes BGR) para carpeta o video."""
     import cv2
 
     if fuente.is_dir():
-        rutas = sorted(p for p in fuente.iterdir() if p.suffix.lower() in EXT_IMAGEN)
+        rutas = sorted(p for p in fuente.iterdir()
+                       if p.suffix.lower() in EXT_IMAGEN and not es_basura(p.name))
         if not rutas:
             raise SystemExit(f"No hay imágenes en {fuente}")
         return [p.stem for p in rutas], (cv2.imread(str(p)) for p in rutas)
@@ -213,7 +266,9 @@ def cargar_fuente(fuente: Path):
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--pesos", required=True)
-    p.add_argument("--fuente", required=True, type=Path)
+    p.add_argument("--secuencia", type=Path, default=None,
+                   help=".tar/.zip/carpeta con images/ y labels/ (reemplaza a --fuente y --etiquetas)")
+    p.add_argument("--fuente", type=Path, default=None)
     p.add_argument("--canales", required=True, type=Path)
     p.add_argument("--etiquetas", type=Path, default=None)
     p.add_argument("--esperados", type=int, default=None)
@@ -224,8 +279,21 @@ def main() -> None:
 
     from ultralytics import YOLO
 
+    if (a.secuencia is None) == (a.fuente is None):
+        raise SystemExit("Indica --secuencia (tar/zip/carpeta) o --fuente (imágenes/video), uno de los dos.")
+    temporal = tempfile.TemporaryDirectory(prefix="seq_")
+    if a.secuencia is not None:
+        fuente, etiquetas_dir = preparar_secuencia(a.secuencia, Path(temporal.name))
+        a.etiquetas = a.etiquetas or etiquetas_dir
+    else:
+        fuente = a.fuente
+
     canales = cargar_canales(a.canales)
-    nombres, imagenes = cargar_fuente(a.fuente)
+    nombres, imagenes = cargar_fuente(fuente)
+    numeros = [numero_de_cuadro(n, i) for i, n in enumerate(nombres)]
+    saltos = [(x, y) for x, y in zip(numeros, numeros[1:]) if y - x != 1]
+    print(f"{len(nombres)} cuadros ({numeros[0]} a {numeros[-1]}); saltos en la numeración: "
+          f"{len(saltos)}" + (f" (ej. {saltos[:3]})" if saltos else ""))
     modelo = YOLO(a.pesos)
     cuadros_det, cuadros_gt = [], []
     ancho = alto = None
@@ -237,10 +305,10 @@ def main() -> None:
         if a.etiquetas:
             cuadros_gt.append(leer_etiquetas_yolo(a.etiquetas / f"{nombre}.txt", ancho, alto))
 
-    filas = [{"entrada": "detector", **f} for f in evaluar(cuadros_det, canales, ancho, alto, a.esperados)]
+    filas = [{"entrada": "detector", **f} for f in evaluar(cuadros_det, canales, ancho, alto, a.esperados, numeros)]
     imprimir("Detector real", filas)
     if cuadros_gt:
-        gt = [{"entrada": "etiquetas (oráculo)", **f} for f in evaluar(cuadros_gt, canales, ancho, alto, a.esperados)]
+        gt = [{"entrada": "etiquetas (oráculo)", **f} for f in evaluar(cuadros_gt, canales, ancho, alto, a.esperados, numeros)]
         imprimir("Oráculo: cajas etiquetadas (sin errores del detector)", gt)
         filas += gt
 
