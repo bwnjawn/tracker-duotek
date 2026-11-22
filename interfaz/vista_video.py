@@ -22,7 +22,7 @@ from .capas import Marca
 RADIO_ASA = 14        # px: radio del círculo con el nombre de la línea
 TOLERANCIA = 16       # px de distancia al trazo para poder agarrar una línea
 ALTO_ASA = 0.38       # altura (fracción del video) a la que se dibuja el círculo
-CAPAS = ("cajas", "ids", "ruta", "lineas")
+CAPAS = ("cajas", "ids", "ruta", "lineas", "conteo")
 
 COLOR_CAJA = QColor("#22d3ee")        # pez todavía sin contar
 COLOR_CAJA_CONTADO = QColor("#4ade80")  # pez que ya cruzó la línea de conteo
@@ -118,7 +118,7 @@ class VistaVideo(QWidget):
             return
         area = self._rect_imagen()
         p.drawImage(area, self._imagen)
-        if self.capas["lineas"]:
+        if self.capas["lineas"] or self.capas["conteo"]:
             self._pintar_tubos(p, area)
         self._pintar_peces(p)
         if self.capas["lineas"]:
@@ -130,21 +130,23 @@ class VistaVideo(QWidget):
             if i + 1 >= len(bordes):
                 break
             x1, x2 = self._x_a_px(bordes[i]), self._x_a_px(bordes[i + 1])
-            color = QColor(color_de(i))
-            if c.seleccionado:
-                relleno = QColor(color)
-                relleno.setAlpha(35)
-                p.fillRect(QRectF(x1, area.top(), x2 - x1, area.height()), relleno)
+            if self.capas["lineas"]:
+                color = QColor(color_de(i))
+                if c.seleccionado:
+                    relleno = QColor(color)
+                    relleno.setAlpha(35)
+                    p.fillRect(QRectF(x1, area.top(), x2 - x1, area.height()), relleno)
+                else:
+                    p.fillRect(QRectF(x1, area.top(), x2 - x1, area.height()), QColor(0, 0, 0, 110))
+                    color.setAlpha(130)
+                p.setPen(color)
+                p.drawText(QRectF(x1, area.top() + 6, x2 - x1, 20), Qt.AlignHCenter, c.nombre)
+            if self.capas["conteo"] and c.seleccionado:
                 # línea de conteo (fija)
                 (_, y1), _ = c.linea
                 y = area.top() + y1 * area.height()
                 p.setPen(QPen(QColor("#f1c40f"), 2))
                 p.drawLine(QPointF(x1, y), QPointF(x2, y))
-            else:
-                p.fillRect(QRectF(x1, area.top(), x2 - x1, area.height()), QColor(0, 0, 0, 110))
-                color.setAlpha(130)
-            p.setPen(color)
-            p.drawText(QRectF(x1, area.top() + 6, x2 - x1, 20), Qt.AlignHCenter, c.nombre)
 
     def _pintar_peces(self, p: QPainter) -> None:
         for m in self._marcas:

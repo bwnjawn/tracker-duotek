@@ -5,6 +5,7 @@ from __future__ import annotations
 import bisect
 import copy
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -30,7 +31,10 @@ log = logging.getLogger(__name__)
 PESOS_DEFECTO = Path(__file__).resolve().parent.parent / "weights" / "exp_01.pt"
 PASO_LINEA = 0.01  # lo que mueven los botones ◀ ▶ (fracción del ancho del video)
 
-NOMBRES_CAPAS = {"cajas": "Cajas", "ids": "IDs", "ruta": "Ruta", "lineas": "Líneas"}
+NOMBRES_CAPAS = {
+    "cajas": "Cajas", "ids": "IDs", "ruta": "Ruta",
+    "lineas": "Líneas", "conteo": "Línea de conteo",
+}
 ETAPAS = ["Video", "Líneas", "Conteo", "Exportar"]
 PISTAS = [
     "Abra la grabación de los tubos para comenzar.",
@@ -63,6 +67,18 @@ def _tiempo(seg: float) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def problema_con_carpeta(carpeta: str) -> str | None:
+    """Texto de aviso si la carpeta no sirve para guardar; None si está bien."""
+    ruta = Path(carpeta)
+    if not ruta.exists():
+        return f"La carpeta no existe:\n{carpeta}"
+    if not ruta.is_dir():
+        return f"La ruta elegida no es una carpeta:\n{carpeta}"
+    if not os.access(ruta, os.W_OK):
+        return f"No se puede escribir en esta carpeta:\n{carpeta}\nElige otra."
+    return None
+
+
 def crear_detector_real():
     """Carga YOLO con los pesos por defecto (tarda unos segundos la primera vez)."""
     if not PESOS_DEFECTO.exists():
@@ -91,6 +107,7 @@ class VentanaPrincipal(QMainWindow):
         self._canales_analizados: list[Canal] = []  # los canales tal como estaban al contar
         self._cuadros_evento: dict[str, list[int]] = {}  # tubo -> cuadros en que se contó un pez
         self._ids_contados: list[tuple[int, int]] = []  # (cuadro, id del pez) de cada conteo
+        self._carpeta_export = ""  # última carpeta elegida para exportar
         self.reproductor = Reproductor(self)
         # N líneas verticales dividen el video en N+1 tubos (los canales se derivan de ellas)
         self.lineas: list[float] = cn.repartir_lineas(1)
@@ -211,9 +228,8 @@ class VentanaPrincipal(QMainWindow):
         fila_analisis.addWidget(self.btn_pausar)
         fila_analisis.addWidget(self.btn_cancelar)
 
-        # --- etapa 4: exportar
+        # --- etapa 4: exportar (siempre activo: si no hay resultado, avisa al pulsarlo)
         self.btn_exportar = _boton("Exportar resultados…", "descargar", "primario")
-        self.btn_exportar.setEnabled(False)  # se habilita al terminar un conteo
 
         self.pila = QStackedWidget()
         for contenido in (
@@ -602,7 +618,7 @@ class VentanaPrincipal(QMainWindow):
         self._actualizar_nav()
         self.btn_pausar.setEnabled(activo)
         self.btn_cancelar.setEnabled(activo)
-        self.btn_exportar.setEnabled(not activo and self.resultado is not None)
+        self.btn_exportar.setEnabled(not activo)  # sin resultado, al pulsarlo avisa qué falta
         if not activo:
             self._pausado = False
             self.btn_pausar.setText("Pausar")
@@ -616,6 +632,7 @@ class VentanaPrincipal(QMainWindow):
         else:
             self._servicio.reanudar()
         self.btn_pausar.setText("Reanudar" if self._pausado else "Pausar")
+        self.lbl_resultado.setText("Conteo en pausa." if self._pausado else "Contando…")
 
     def _cancelar_analisis(self) -> None:
         if self._servicio is not None and self._hilo is not None:
@@ -624,7 +641,10 @@ class VentanaPrincipal(QMainWindow):
 
     def _on_progreso(self, hechos: int, total: int) -> None:
         if total > 0:
-            self.progreso.setValue(min(100, hechos * 100 // total))
+            pct = min(100, hechos * 100 // total)
+            self.progreso.setValue(pct)
+            if not self._pausado:
+                self.lbl_resultado.setText(f"Contando… {pct} %")
 
     def _mostrar_conteos(self, conteos: dict[str, int]) -> None:
         """Conteo de cada tubo en el marcador mientras el análisis avanza."""
@@ -660,7 +680,6 @@ class VentanaPrincipal(QMainWindow):
         self._cuadros_evento = {}
         self._ids_contados = []
         self.vista.set_marcas([])  # los peces dibujados eran del resultado que se descarta
-        self.btn_exportar.setEnabled(False)
         self.progreso.setValue(0)
         self.lbl_resultado.setText(motivo)
         self.conteo.set_conteos([None] * len(self.canales))
@@ -669,19 +688,36 @@ class VentanaPrincipal(QMainWindow):
     def exportar_resultados(self, _checked: bool = False, carpeta: str | None = None) -> None:
         r = self.resultado
         if r is None:
-            QMessageBox.information(self, "Sin resultados", "Cuenta los peces antes de exportar.")
+            QMessageBox.information(
+                self, "Sin resultados",
+                "Este video todavía no está procesado.\n"
+                "Cuenta los peces en el paso «Conteo» y luego exporta.")
             return
         if not carpeta:
-            carpeta = QFileDialog.getExistingDirectory(self, "Carpeta donde guardar los resultados")
+            inicio = self._carpeta_export or str(Path(r.video).parent)
+            carpeta = QFileDialog.getExistingDirectory(
+                self, "Carpeta donde guardar los resultados", inicio)
         if not carpeta:
             return
+        problema = problema_con_carpeta(carpeta)
+        if problema:
+            QMessageBox.warning(self, "Carpeta no válida", problema)
+            return
+        self._carpeta_export = carpeta
         try:
             ruta = exportar(
                 carpeta, r.video, r.fps, r.ancho, r.alto, self._canales_analizados,
                 r.conteos, r.eventos, r.filas, modelo=PESOS_DEFECTO.name,
             )
         except OSError as e:
-            QMessageBox.warning(self, "Error", f"No se pudo exportar:\n{e}")
+            QMessageBox.warning(self, "No se pudo exportar",
+                                f"No se pudo guardar en la carpeta elegida:\n{e}")
+            return
+        except Exception:
+            log.exception("Falla inesperada al exportar")
+            QMessageBox.warning(
+                self, "No se pudo exportar",
+                "Ocurrió un error al exportar. Los resultados siguen aquí: puedes intentarlo de nuevo.")
             return
         QMessageBox.information(self, "Resultados exportados", f"Archivos guardados en:\n{ruta.parent}")
 
@@ -693,6 +729,7 @@ class VentanaPrincipal(QMainWindow):
     def _on_error_analisis(self, mensaje: str) -> None:
         self.progreso.setValue(0)
         self.conteo.set_conteos([None] * len(self.canales))
+        self.lbl_resultado.setText("El conteo se detuvo por un error.")
         QMessageBox.warning(self, "Error en el conteo", mensaje)
 
     def _limpiar_hilo(self) -> None:
