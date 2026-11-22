@@ -249,8 +249,12 @@ def cargar_fuente(fuente: Path):
         if not rutas:
             raise SystemExit(f"No hay imágenes en {fuente}")
         return [p.stem for p in rutas], (cv2.imread(str(p)) for p in rutas)
+    if not fuente.exists():
+        raise SystemExit(f"No existe {fuente}. Revisa la ruta (no uses 'RUTA': es un marcador de ejemplo).")
     cap = cv2.VideoCapture(str(fuente))
     n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if not cap.isOpened() or n <= 0:
+        raise SystemExit(f"No pude abrir {fuente} como video (¿formato o códec no soportado?).")
 
     def gen():
         while True:
@@ -291,6 +295,8 @@ def main() -> None:
     canales = cargar_canales(a.canales)
     nombres, imagenes = cargar_fuente(fuente)
     numeros = [numero_de_cuadro(n, i) for i, n in enumerate(nombres)]
+    if not numeros:
+        raise SystemExit(f"No se encontraron cuadros en {fuente}.")
     saltos = [(x, y) for x, y in zip(numeros, numeros[1:]) if y - x != 1]
     print(f"{len(nombres)} cuadros ({numeros[0]} a {numeros[-1]}); saltos en la numeración: "
           f"{len(saltos)}" + (f" (ej. {saltos[:3]})" if saltos else ""))
