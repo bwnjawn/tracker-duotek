@@ -80,6 +80,17 @@ El primer comando deja el dataset en `dataset/dataset_segmentado/dataset_yolo/`,
 `data.yaml` que usan los configs `exp_00_base` y `exp_04_yolo26`. Los pasos de `scripts/`,
 el reparto elegido y su justificación están en [scripts/README.md](scripts/README.md).
 
+Si el dataset trae una carpeta intermedia (`dataset/dataset/images/...`), no importa: los scripts buscan
+solos la carpeta que tiene `images/`, `labels/` y `tracking/`.
+
+Para entrenar en Google Colab (GPU gratis) usa [notebooks/entrenar_duotek_colab.ipynb](notebooks/entrenar_duotek_colab.ipynb):
+copia el dataset al disco de Colab, hace el reparto, entrena la base y YOLO26 y guarda pesos y logs en Drive.
+En cualquier máquina, `--data RUTA/data.yaml` reemplaza la clave `data` del config:
+
+```
+uv run python -m src.entrenar --config configs/exp_04_yolo26.yaml --data RUTA/data.yaml
+```
+
 Al entrenar, los pesos quedan en `weights/<nombre>.pt`, las métricas en `logs/` y las corridas
 completas en `runs/` (esta última no se sube a git).
 
