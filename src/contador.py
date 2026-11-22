@@ -3,8 +3,13 @@
 Regla (propuesta del grupo, pendiente de confirmar):
   Un ID suma UNA sola vez en un canal cuando el segmento que une su centro
   en el cuadro anterior con su centro actual cruza la línea de conteo de
-  ese canal. Solo se consideran los canales seleccionados, y solo las
-  detecciones cuyo centro está dentro del polígono del canal.
+  ese canal. Solo se consideran los canales seleccionados.
+
+  Se le deben pasar TODAS las detecciones con id, estén o no dentro del
+  polígono. Así el cruce se detecta aunque el pez salte de un lado a otro de
+  la línea entre dos cuadros, o aunque el detector lo pierda un momento justo
+  en la zona. El polígono solo decide DÓNDE vale un cruce: debe ocurrir dentro
+  del canal (el punto de cruce, o alguno de los dos extremos del movimiento).
 
 Trabaja en coordenadas normalizadas (0 a 1). No depende de YOLO ni de la
 interfaz: recibe detecciones y devuelve eventos, así sirve igual para las
@@ -43,6 +48,15 @@ def cruce_de_linea(p1: Punto, p2: Punto, q1: Punto, q2: Punto) -> int | None:
     return 1 if lado2 else -1
 
 
+def punto_de_cruce(p1: Punto, p2: Punto, q1: Punto, q2: Punto) -> Punto:
+    """Punto donde la recta p1->p2 corta la recta q1-q2. Solo tiene sentido si
+    cruce_de_linea() ya confirmó que los segmentos se cruzan."""
+    d1 = _orientacion(q1, q2, p1)
+    d2 = _orientacion(q1, q2, p2)
+    t = d1 / (d1 - d2) if d1 != d2 else 0.0
+    return (p1[0] + t * (p2[0] - p1[0]), p1[1] + t * (p2[1] - p1[1]))
+
+
 @dataclass
 class Evento:
     cuadro: int
@@ -70,11 +84,21 @@ class ContadorCanales:
 
     min_hits: cuadros mínimos en que debe haberse visto un ID antes de que su
     cruce cuente (filtra pistas fugaces; 1 = sin filtro, que es la base).
+
+    compensar_confirmacion: cuadros que se retrocede, con la velocidad del pez,
+    desde la primera posición que entrega el tracker. ByteTrack no da el id
+    hasta la segunda detección, así que el pez ya avanzó un salto cuando lo
+    vemos por primera vez; si ese salto atravesó la línea, el cruce se
+    reconstruye aquí (0 = desactivado, 1 = lo normal con ByteTrack).
     """
 
-    def __init__(self, canales: list[Canal], min_hits: int = 1) -> None:
+    def __init__(self, canales: list[Canal], min_hits: int = 1,
+                 compensar_confirmacion: int = 1) -> None:
         self.canales = [c for c in canales if c.seleccionado]
         self.min_hits = max(1, int(min_hits))
+        self.compensar_confirmacion = max(0, int(compensar_confirmacion))
+        # Primera posición vista de cada (canal, id), a la espera de la segunda.
+        self._nuevo: dict[tuple[str, int], tuple[Punto, int]] = {}
         # Todos los canales seleccionados aparecen, aunque tengan 0.
         self.conteos: dict[str, int] = {c.id: 0 for c in self.canales}
         self.eventos: list[Evento] = []
@@ -98,7 +122,25 @@ class ContadorCanales:
         """Olvida las posiciones previas (usar al saltar a otro cuadro del
         video). Los conteos y los IDs ya contados se conservan."""
         self._prev.clear()
+        self._nuevo.clear()
         self._ultimo_cuadro = None
+
+    def _contar_si_cruza(self, c: Canal, tid: int, cuadro: int, tiempo_s: float,
+                         a: Punto, b: Punto, a_dentro: bool, donde: Punto,
+                         donde_dentro: bool, nuevos: list[Evento]) -> None:
+        """Suma un cruce de a -> b si corta la línea del canal, en el sentido
+        pedido y dentro del canal (extremo dentro o punto de cruce dentro)."""
+        sentido = cruce_de_linea(a, b, c.linea[0], c.linea[1])
+        if sentido is None or c.sentido not in (0, sentido):
+            return
+        cruce = punto_de_cruce(a, b, c.linea[0], c.linea[1])
+        if not (a_dentro or donde_dentro or c.contiene(*cruce)):
+            return
+        self._contados.add((c.id, tid))
+        self.conteos[c.id] += 1
+        ev = Evento(cuadro, tiempo_s, c.id, tid, donde[0], donde[1], sentido)
+        self.eventos.append(ev)
+        nuevos.append(ev)
 
     def actualizar(self, cuadro: int, tiempo_s: float, puntos: list[tuple[int | None, float, float]]) -> list[Evento]:
         """Procesa un cuadro. `puntos` = lista de (id, x, y) con el centro de
@@ -122,17 +164,24 @@ class ContadorCanales:
                 clave = (c.id, tid)
                 dentro = c.contiene(x, y)
                 previo = self._prev.get(clave)
-                if previo is None and not dentro:
-                    continue
-                if previo is not None and clave not in self._contados:
+                if previo is None:
+                    self._nuevo[clave] = (actual, cuadro)
+                elif clave not in self._contados and self._hits[tid] >= self.min_hits:
                     (px, py), prev_dentro = previo
-                    if (dentro or prev_dentro) and self._hits[tid] >= self.min_hits:
-                        sentido = cruce_de_linea((px, py), actual, c.linea[0], c.linea[1])
-                        if sentido is not None and c.sentido in (0, sentido):
-                            self._contados.add(clave)
-                            self.conteos[c.id] += 1
-                            ev = Evento(cuadro, tiempo_s, c.id, tid, x, y, sentido)
-                            self.eventos.append(ev)
-                            nuevos.append(ev)
+                    # 1) Pez recién confirmado: ¿cruzó la línea en el salto que el
+                    #    tracker no llegó a entregar?
+                    primero = self._nuevo.pop(clave, None)
+                    if (primero is not None and self.compensar_confirmacion
+                            and cuadro == primero[1] + 1):
+                        ant = (px - (x - px) * self.compensar_confirmacion,
+                               py - (y - py) * self.compensar_confirmacion)
+                        self._contar_si_cruza(c, tid, cuadro, tiempo_s, ant, (px, py),
+                                              prev_dentro, (px, py), prev_dentro, nuevos)
+                    # 2) Cruce normal entre la posición anterior y la actual.
+                    if clave not in self._contados:
+                        self._contar_si_cruza(c, tid, cuadro, tiempo_s, (px, py), actual,
+                                              prev_dentro, actual, dentro, nuevos)
+                else:
+                    self._nuevo.pop(clave, None)
                 self._prev[clave] = (actual, dentro)
         return nuevos

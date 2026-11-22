@@ -88,7 +88,9 @@ def crear_detector_real():
         )
     from src.detector import Detector  # import perezoso: torch tarda en cargar
 
-    return Detector(str(PESOS_DEFECTO))
+    # "centros": seguidor por posición del centro (src/seguidor.py). ByteTrack no confirmaba
+    # a los peces que saltan casi su largo entre cuadros y subcontaba (ver docs/).
+    return Detector(str(PESOS_DEFECTO), tracker="centros")
 
 
 class VentanaPrincipal(QMainWindow):
