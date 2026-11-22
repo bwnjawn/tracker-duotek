@@ -107,11 +107,15 @@ si está seleccionado y el sentido de conteo (0 cuenta cruces en cualquier senti
 ```
 src/         Módulos de IA y lógica
   canales.py     Canal (polígono, línea, selección) y su guardado y carga
-  detector.py    YOLO + ByteTrack sobre un cuadro
+  detector.py    YOLO + seguidor sobre un cuadro (SeguidorCentros por defecto; ByteTrack opcional)
+  seguidor.py    SeguidorCentros: ids por posición del centro, desde la primera detección
   contador.py    Un contador por canal; un id suma una vez al cruzar la línea
   servicio.py    Analiza un video completo con progreso, pausa y cancelación
   contar_video.py, exportador.py, eval_conteo.py, entrenar.py   Otras herramientas
                      (entrenar.py entrena con un data.yaml cualquiera)
+  comparar_seguidores.py   Mide qué seguidor cuenta mejor en una secuencia, con y sin etiquetas
+  secuencia_a_video.py     Arma un .mp4 a partir de una secuencia (.tar, .zip o carpeta)
+  diagnostico_conteo.py    Detalle por pista de qué peces se pierden y dónde
 interfaz/    Ventana en PySide6
   ventana_principal.py   Ventana: video, asistente de 4 etapas y marcador de conteo
   vista_video.py         Dibuja el video, las líneas de los tubos y las capas (cajas, IDs, ruta)

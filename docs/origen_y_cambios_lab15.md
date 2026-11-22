@@ -46,8 +46,7 @@ Archivos del lab que se mantienen sin cambios, ahora en `lab15/`: `prepare_data.
   conteo a las trayectorias etiquetadas, por lo que debe ser simple y determinista.
 - **Limitación heredada del lab:** ByteTrack de Ultralytics entrega IDs solo cuando la pista
   está confirmada, así que un pez que cruza justo al entrar puede no contarse. Esto explica
-  gran parte del error de 33 % del lab. Mitigaciones a probar: bajar `new_track_thresh`,
-  subir `track_buffer` o contar por entrada al canal.
+  gran parte del error de 33 % del lab. Se resolvió con un seguidor propio (sección 5).
 
 ## 4. Verificación del código adaptado
 
@@ -60,7 +59,39 @@ Archivos del lab que se mantienen sin cambios, ahora en `lab15/`: `prepare_data.
   detecciones y a que aquí el tracker ve los cuadros sin huecos; no se ha analizado cuadro a
   cuadro. Con dos canales (mitades izquierda y derecha) se obtuvo 1 + 6 = 7.
 
-## 5. Pendiente
+## 5. Corrección del subconteo: seguidor por centros
+
+**Problema.** Con `seq_0003` (10 peces) el Tracker contaba 4. ByteTrack confirma un pez nuevo
+solo si, en el cuadro siguiente, su caja se solapa con la anterior (umbral fijo en Ultralytics
+8.4.184). En estas secuencias el pez avanza casi su propio largo por cuadro, así que muchos
+peces nunca se confirman y no se cuentan. Con las cajas etiquetadas a mano (experimento
+«oráculo») ByteTrack igual cuenta 7 de 10: el fallo es del seguidor, no del detector.
+
+**Solución.** `src/seguidor.py` (`SeguidorCentros`) da un id desde la primera detección y
+empareja por la posición del centro, con predicción por velocidad y usando el número real de
+cuadro de la secuencia. El contador recibe todas las detecciones y exige `min_hits = 2`.
+Es el valor por defecto de la aplicación y de `contar_video`; ByteTrack sigue disponible con
+`--tracker`.
+
+**Resultados** (detector `exp_01`; salmones contados / reales):
+
+| Secuencia | ByteTrack por defecto | SeguidorCentros |
+|---|---|---|
+| `seq_0003` (imágenes) | 5 / 10 | 10 / 10 |
+| `seq_0003` (video) | 5 / 10 | 10 / 10 |
+| `seq_0004` | 7 / 9 | 9 / 9 |
+| `seq_0006` | 35 / 46 | 47 / 46 |
+
+- `exp_01` se entrenó incluyendo `seq_0003`, así que el detector es optimista en esa
+  secuencia; la comparación entre seguidores usa las mismas detecciones.
+- Con `min_hits = 3` se pierden peces que el detector ve pocos cuadros (`seq_0004`: 8 de 9;
+  `seq_0006`: 45 de 46). Si aparecen falsos positivos con los datos nuevos, conviene subirlo.
+- En `seq_0006` el +1 viene del detector: con las etiquetas se cuentan exactamente 46.
+- Reproducir: `uv run python -m src.comparar_seguidores --pesos weights/exp_01.pt
+  --secuencia data/seq_0003.tar --canales canales.json --esperados 10`. Los datos y videos
+  no se suben al repositorio.
+
+## 6. Pendiente
 
 - [ ] Entrenar la línea base y la variante con el dataset de Duotek y completar la tabla
       comparativa (mAP@0,5, precisión, recall en validación y error de conteo por canal).
