@@ -79,6 +79,7 @@ class ServicioConteo:
         progreso: Callable[[int, int], None] | None = None,
         por_cuadro: Callable | None = None,
         max_cuadros: int | None = None,
+        compensar_confirmacion: int = 1,
     ) -> ResultadoAnalisis:
         """Procesa el video completo.
 
@@ -114,7 +115,8 @@ class ServicioConteo:
         # Todo análisis parte de cero: contador nuevo y tracker limpio.
         self._cancelar.clear()
         self._continuar.set()
-        contador = ContadorCanales(canales, min_hits=min_hits)
+        contador = ContadorCanales(canales, min_hits=min_hits,
+                                   compensar_confirmacion=compensar_confirmacion)
         self._reiniciar_detector()
 
         detecciones: dict[int, list[Deteccion]] = {}
@@ -140,7 +142,9 @@ class ServicioConteo:
                         "canal": canal, "x1": round(d.x1, 1), "y1": round(d.y1, 1),
                         "x2": round(d.x2, 1), "y2": round(d.y2, 1), "conf": round(d.conf, 3),
                     })
-                contador.actualizar(cuadro, tiempo, [(d.id, d.cx_n, d.cy_n) for d in en_canal])
+                # Al contador van TODAS las detecciones (ver contador.py); la exportación y el
+                # dibujo siguen usando solo las que caen dentro de un canal.
+                contador.actualizar(cuadro, tiempo, [(d.id, d.cx_n, d.cy_n) for d in dets])
                 if en_canal:
                     detecciones[cuadro] = en_canal
                 if por_cuadro is not None:

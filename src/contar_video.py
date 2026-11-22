@@ -55,6 +55,7 @@ def ejecutar(
     max_cuadros: int | None = None,
     modelo: str = "",
     parametros: dict | None = None,
+    compensar_confirmacion: int = 1,
 ) -> dict:
     """Procesa un video completo. `detector` es cualquier objeto con un método
     procesar(frame, cuadro) -> list[Deteccion] (así se puede probar sin YOLO)."""
@@ -80,6 +81,7 @@ def ejecutar(
         r = ServicioConteo(detector).analizar(
             str(video), canales, min_hits=min_hits, max_cuadros=max_cuadros,
             por_cuadro=dibujar_cuadro if anotar else None,
+            compensar_confirmacion=compensar_confirmacion,
         )
     finally:
         if escritor is not None:
@@ -102,6 +104,10 @@ def main() -> None:
     p.add_argument("--conf", type=float, default=0.25)
     p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--min-hits", type=int, default=1)
+    p.add_argument("--compensar", type=int, default=1,
+                   help="cuadros que se compensa el retraso de confirmación de ByteTrack (0 = no)")
+    p.add_argument("--tracker", default="bytetrack.yaml",
+                   help="config del tracker, p. ej. configs/bytetrack_sensible.yaml")
     p.add_argument("--max-cuadros", type=int, default=None)
     p.add_argument("--sin-video", action="store_true")
     args = p.parse_args()
@@ -109,11 +115,13 @@ def main() -> None:
     from src.detector import Detector
 
     canales = cargar_canales(args.canales)
-    detector = Detector(args.pesos, conf=args.conf, imgsz=args.imgsz)
+    detector = Detector(args.pesos, conf=args.conf, imgsz=args.imgsz, tracker=args.tracker)
     res = ejecutar(
         detector, args.video, canales, args.salida, min_hits=args.min_hits,
         anotar=not args.sin_video, max_cuadros=args.max_cuadros, modelo=args.pesos,
-        parametros={"conf": args.conf, "imgsz": args.imgsz},
+        parametros={"conf": args.conf, "imgsz": args.imgsz, "tracker": args.tracker,
+                    "compensar": args.compensar},
+        compensar_confirmacion=args.compensar,
     )
     print(json.dumps(res, indent=2, ensure_ascii=False))
 
