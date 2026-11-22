@@ -50,7 +50,7 @@ def ejecutar(
     video: str,
     canales: list[Canal],
     salida: str | Path,
-    min_hits: int = 1,
+    min_hits: int = 3,
     anotar: bool = True,
     max_cuadros: int | None = None,
     modelo: str = "",
@@ -103,11 +103,12 @@ def main() -> None:
     p.add_argument("--salida", required=True)
     p.add_argument("--conf", type=float, default=0.25)
     p.add_argument("--imgsz", type=int, default=640)
-    p.add_argument("--min-hits", type=int, default=1)
+    p.add_argument("--min-hits", type=int, default=3,
+                   help="cuadros mínimos en que debe verse un pez antes de contarlo (3 descarta falsos positivos sueltos)")
     p.add_argument("--compensar", type=int, default=1,
                    help="cuadros que se compensa el retraso de confirmación de ByteTrack (0 = no)")
-    p.add_argument("--tracker", default="bytetrack.yaml",
-                   help="config del tracker, p. ej. configs/bytetrack_sensible.yaml")
+    p.add_argument("--tracker", default="centros",
+                   help="\"centros\" (por defecto) o una config de ByteTrack, p. ej. configs/bytetrack_sensible.yaml")
     p.add_argument("--max-cuadros", type=int, default=None)
     p.add_argument("--sin-video", action="store_true")
     args = p.parse_args()

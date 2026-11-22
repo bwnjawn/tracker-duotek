@@ -75,7 +75,7 @@ class ServicioConteo:
         self,
         video: str,
         canales: list[Canal],
-        min_hits: int = 1,
+        min_hits: int = 3,
         progreso: Callable[[int, int], None] | None = None,
         por_cuadro: Callable | None = None,
         max_cuadros: int | None = None,

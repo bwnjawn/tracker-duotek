@@ -100,7 +100,6 @@ class Detector:
             salida.append(Deteccion(cuadro, tid, x1, y1, x2, y2, float(c), ancho, alto))
         return salida
 
-
     def _procesar_con_centros(self, frame_bgr, cuadro: int, ancho: int, alto: int) -> list[Deteccion]:
         r = self.modelo.predict(
             frame_bgr, conf=self.conf, imgsz=self.imgsz, device=self.device, verbose=False
