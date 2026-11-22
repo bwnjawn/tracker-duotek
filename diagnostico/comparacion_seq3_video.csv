@@ -1,0 +1,8 @@
+entrada,seguidor,contados,por_canal,ids_distintos,detecciones,detecciones_sin_id,esperados,error_rel
+detector,ByteTrack defecto,5,"{'tubo_1': 4, 'tubo_2': 1}",8,94,57,10,-0.5
+detector,ByteTrack sensible (parche 3),6,"{'tubo_1': 4, 'tubo_2': 2}",7,94,48,10,-0.4
+detector,"ByteTrack confirmación 0,97 + match 0,95",8,"{'tubo_1': 5, 'tubo_2': 3}",14,94,18,10,-0.2
+detector,Centros (min_hits=1),10,"{'tubo_1': 6, 'tubo_2': 4}",19,94,0,10,0.0
+detector,Centros (min_hits=2),10,"{'tubo_1': 6, 'tubo_2': 4}",19,94,0,10,0.0
+detector,Centros (min_hits=3),10,"{'tubo_1': 6, 'tubo_2': 4}",19,94,0,10,0.0
+detector,"ByteTrack confirmación 0,97 (min_hits=3)",7,"{'tubo_1': 5, 'tubo_2': 2}",14,94,18,10,-0.3

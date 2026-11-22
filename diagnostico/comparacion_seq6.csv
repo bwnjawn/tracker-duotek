@@ -1,0 +1,15 @@
+entrada,seguidor,contados,por_canal,ids_distintos,detecciones,detecciones_sin_id,esperados,error_rel
+detector,ByteTrack defecto,35,"{'tubo_1': 17, 'tubo_2': 18}",53,502,168,46,-0.2391304347826087
+detector,ByteTrack sensible (parche 3),39,"{'tubo_1': 20, 'tubo_2': 19}",43,502,128,46,-0.15217391304347827
+detector,"ByteTrack confirmación 0,97 + match 0,95",45,"{'tubo_1': 22, 'tubo_2': 23}",47,502,59,46,-0.021739130434782608
+detector,Centros (min_hits=1),47,"{'tubo_1': 22, 'tubo_2': 25}",70,502,0,46,0.021739130434782608
+detector,Centros (min_hits=2),47,"{'tubo_1': 22, 'tubo_2': 25}",70,502,0,46,0.021739130434782608
+detector,Centros (min_hits=3),45,"{'tubo_1': 21, 'tubo_2': 24}",70,502,0,46,-0.021739130434782608
+detector,"ByteTrack confirmación 0,97 (min_hits=3)",43,"{'tubo_1': 20, 'tubo_2': 23}",47,502,59,46,-0.06521739130434782
+etiquetas (oráculo),ByteTrack defecto,39,"{'tubo_1': 20, 'tubo_2': 19}",57,447,95,46,-0.15217391304347827
+etiquetas (oráculo),ByteTrack sensible (parche 3),41,"{'tubo_1': 21, 'tubo_2': 20}",46,447,77,46,-0.10869565217391304
+etiquetas (oráculo),"ByteTrack confirmación 0,97 + match 0,95",45,"{'tubo_1': 22, 'tubo_2': 23}",46,447,50,46,-0.021739130434782608
+etiquetas (oráculo),Centros (min_hits=1),46,"{'tubo_1': 22, 'tubo_2': 24}",71,447,0,46,0.0
+etiquetas (oráculo),Centros (min_hits=2),46,"{'tubo_1': 22, 'tubo_2': 24}",71,447,0,46,0.0
+etiquetas (oráculo),Centros (min_hits=3),43,"{'tubo_1': 21, 'tubo_2': 22}",71,447,0,46,-0.06521739130434782
+etiquetas (oráculo),"ByteTrack confirmación 0,97 (min_hits=3)",41,"{'tubo_1': 20, 'tubo_2': 21}",46,447,50,46,-0.10869565217391304

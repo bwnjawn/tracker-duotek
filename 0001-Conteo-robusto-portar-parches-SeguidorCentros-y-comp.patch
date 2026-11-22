@@ -1,0 +1,1169 @@
+From 3d7eb06e101701cb83953698a0d008b34c65b38d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 22 Nov 2026 05:57:16 -0300
+Subject: [PATCH] Conteo robusto: portar parches, SeguidorCentros y comparador
+ de seguidores
+
+- Portar a mano los 3 parches de la sesion anterior (no aplicaban limpio tras el
+  refactor a ServicioConteo): todas las detecciones van al contador, parametro
+  compensar_confirmacion, diagnostico por pista/movimiento, configs/bytetrack_sensible.yaml.
+- Nuevo src/seguidor.py (SeguidorCentros): id desde la primera deteccion y emparejado
+  por posicion del centro, para videos donde el pez salta casi su largo entre cuadros
+  (ByteTrack no confirma esos peces). Se activa con Detector(tracker="centros").
+- Nuevo src/comparar_seguidores.py: corre el detector una vez y compara ByteTrack
+  (varias configuraciones) y SeguidorCentros, con experimento oraculo (etiquetas).
+- Pruebas nuevas (test_seguidor.py); suite completa: 103 pasan.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KaqjLSAQuh77qfNPFzhqoW
+---
+ configs/bytetrack_sensible.yaml |  12 ++
+ src/comparar_seguidores.py      | 258 ++++++++++++++++++++++++++++++++
+ src/contador.py                 |  77 ++++++++--
+ src/contar_video.py             |  12 +-
+ src/detector.py                 |  31 ++++
+ src/diagnostico_conteo.py       | 155 +++++++++++++++++++
+ src/seguidor.py                 | 125 ++++++++++++++++
+ src/servicio.py                 |   8 +-
+ tests/test_conteo_robusto.py    | 172 +++++++++++++++++++++
+ tests/test_seguidor.py          | 105 +++++++++++++
+ 10 files changed, 937 insertions(+), 18 deletions(-)
+ create mode 100644 configs/bytetrack_sensible.yaml
+ create mode 100644 src/comparar_seguidores.py
+ create mode 100644 src/diagnostico_conteo.py
+ create mode 100644 src/seguidor.py
+ create mode 100644 tests/test_conteo_robusto.py
+ create mode 100644 tests/test_seguidor.py
+
+diff --git a/configs/bytetrack_sensible.yaml b/configs/bytetrack_sensible.yaml
+new file mode 100644
+index 0000000..8c6c2c0
+--- /dev/null
++++ b/configs/bytetrack_sensible.yaml
+@@ -0,0 +1,12 @@
++# ByteTrack más permisivo, para videos donde el pez salta ~100 px entre cuadros y el
++# detector lo ve con poca confianza. Parte de la configuración por defecto de ultralytics
++# (bytetrack.yaml) y cambia solo lo de abajo. Usar junto con --conf 0.15.
++#
++#   uv run python -m src.diagnostico_conteo ... --conf 0.15 --tracker configs/bytetrack_sensible.yaml
++tracker_type: bytetrack
++track_high_thresh: 0.15   # por defecto 0.25: acepta detecciones menos seguras
++track_low_thresh: 0.05    # por defecto 0.1
++new_track_thresh: 0.15    # por defecto 0.25: permite iniciar una pista con un pez poco seguro
++track_buffer: 30          # sin cambio
++match_thresh: 0.95        # por defecto 0.8: exige menos solape entre cuadros (peces que saltan)
++fuse_score: True          # sin cambio
+diff --git a/src/comparar_seguidores.py b/src/comparar_seguidores.py
+new file mode 100644
+index 0000000..b26c35e
+--- /dev/null
++++ b/src/comparar_seguidores.py
+@@ -0,0 +1,258 @@
++"""Compara seguidores (ByteTrack y SeguidorCentros) sobre la MISMA secuencia.
++
++Responde dos preguntas con datos reales, sin tocar el entrenamiento:
++  1. ¿Cuál seguidor cuenta mejor? (detector real -> cada seguidor -> ContadorCanales)
++  2. ¿El fallo es del detector o del seguidor? (experimento "oráculo": se pasan las cajas
++     ETIQUETADAS, sin errores de detección, por los mismos seguidores. Si con las etiquetas
++     igual se pierden peces, el culpable es el seguidor.)
++
++El detector se ejecuta una sola vez; luego las mismas detecciones alimentan a todos los seguidores,
++así la comparación es justa y rápida.
++
++Uso (desde la raíz del repo, en tu PC con los datos):
++    uv run python -m src.comparar_seguidores --pesos pesos/exp_01.pt \
++        --fuente RUTA/seq_0003/images --etiquetas RUTA/seq_0003/labels \
++        --canales canales.json --esperados 10 --salida diagnostico/comparacion_seq3
++
++  --fuente   carpeta de imágenes (orden alfabético = orden temporal) o un video.
++  --etiquetas  (opcional) carpeta con un .txt YOLO por imagen, mismo nombre. Activa el oráculo.
++  --esperados  conteo real total de la secuencia (para calcular el error).
++
++Salida: tabla en pantalla y <salida>.csv. Solo contiene números agregados: se puede compartir.
++"""
++
++from __future__ import annotations
++
++import argparse
++import csv
++import types
++from dataclasses import dataclass
++from pathlib import Path
++
++import numpy as np
++
++from src.canales import Canal, cargar_canales
++from src.contador import ContadorCanales
++from src.seguidor import SeguidorCentros
++
++EXT_IMAGEN = {".jpg", ".jpeg", ".png", ".bmp"}
++
++
++class CajasSimples:
++    """Detecciones con la interfaz mínima que ByteTrack necesita (xywh, conf, cls, índice booleano)."""
++
++    def __init__(self, xywh, conf, cls=None) -> None:
++        self.xywh = np.asarray(xywh, dtype=np.float32).reshape(-1, 4)
++        self.conf = np.asarray(conf, dtype=np.float32).reshape(-1)
++        self.cls = np.zeros(len(self.conf), np.float32) if cls is None else np.asarray(cls, np.float32)
++
++    def __len__(self) -> int:
++        return len(self.conf)
++
++    def __getitem__(self, m):
++        o = CajasSimples.__new__(CajasSimples)
++        o.xywh, o.conf, o.cls = self.xywh[m], self.conf[m], self.cls[m]
++        return o
++
++
++def leer_etiquetas_yolo(ruta: Path, ancho: int, alto: int) -> CajasSimples:
++    """Lee un .txt YOLO (clase cx cy w h normalizados) y lo devuelve en píxeles, confianza 1."""
++    xywh, cls = [], []
++    if ruta.exists():
++        for linea in ruta.read_text().splitlines():
++            p = linea.split()
++            if len(p) >= 5:
++                c, cx, cy, w, h = int(float(p[0])), *map(float, p[1:5])
++                xywh.append([cx * ancho, cy * alto, w * ancho, h * alto])
++                cls.append(c)
++    return CajasSimples(xywh, [1.0] * len(xywh), cls)
++
++
++# ---------------------------------------------------------------------------- seguidores
++class _ByteTrack:
++    """ByteTrack real de ultralytics con parámetros ajustables.
++
++    umbral_confirmacion: ultralytics fija en 0,7 cuánta distancia (1 - IoU) se tolera para
++    confirmar un pez nuevo con su segunda detección. Aquí se puede relajar (0,97 = casi cualquier
++    solape sirve). None = comportamiento original."""
++
++    def __init__(self, umbral_confirmacion: float | None = None, **params) -> None:
++        from ultralytics.trackers import byte_tracker as bt
++        from ultralytics.trackers.utils import matching
++
++        base = dict(track_high_thresh=0.25, track_low_thresh=0.1, new_track_thresh=0.25,
++                    track_buffer=30, match_thresh=0.8, fuse_score=True)
++        base.update(params)
++        args = types.SimpleNamespace(**base)
++
++        clase = bt.BYTETracker
++        if umbral_confirmacion is not None:
++            umbral = umbral_confirmacion
++
++            class _Confirma(bt.BYTETracker):
++                def _unconfirmed_association(self, unconfirmed, u_detection, detections, activated, removed):
++                    detections = [detections[i] for i in u_detection]
++                    if not unconfirmed:
++                        return list(range(len(detections))), detections
++                    dists = self.get_dists(unconfirmed, detections)
++                    matches, u_unconf, u_det = matching.linear_assignment(dists, thresh=umbral)
++                    for it, idet in matches:
++                        unconfirmed[it].update(detections[idet], self.frame_id)
++                        activated.append(unconfirmed[it])
++                    for it in u_unconf:
++                        unconfirmed[it].mark_removed()
++                        removed.append(unconfirmed[it])
++                    return u_det, detections
++
++            clase = _Confirma
++        self._t = clase(args)
++
++    def ids(self, cajas, cuadro: int, ancho: int, alto: int) -> list[int | None]:
++        salida = self._t.update(cajas)
++        por_indice = {int(r[7]): int(r[4]) for r in salida}
++        return [por_indice.get(i) for i in range(len(cajas))]
++
++
++class _Centros:
++    def __init__(self, **params) -> None:
++        self._s = SeguidorCentros(**params)
++
++    def ids(self, cajas, cuadro: int, ancho: int, alto: int) -> list[int | None]:
++        return self._s.actualizar(
++            cuadro, [(float(x) / ancho, float(y) / alto) for x, y, _w, _h in cajas.xywh]
++        )
++
++
++@dataclass(frozen=True)
++class Candidato:
++    nombre: str
++    fabrica: object  # () -> seguidor con .ids(...)
++    min_hits: int = 1
++
++
++def candidatos() -> list[Candidato]:
++    sensible = dict(track_high_thresh=0.15, track_low_thresh=0.05, new_track_thresh=0.15, match_thresh=0.95)
++    lista = [
++        Candidato("ByteTrack defecto", lambda: _ByteTrack()),
++        Candidato("ByteTrack sensible (parche 3)", lambda: _ByteTrack(**sensible)),
++        Candidato("ByteTrack confirmación 0,97 + match 0,95",
++                  lambda: _ByteTrack(umbral_confirmacion=0.97, match_thresh=0.95)),
++    ]
++    for mh in (1, 2, 3):
++        lista.append(Candidato(f"Centros (min_hits={mh})", lambda: _Centros(), min_hits=mh))
++    lista.append(Candidato("ByteTrack confirmación 0,97 (min_hits=3)",
++                           lambda: _ByteTrack(umbral_confirmacion=0.97, match_thresh=0.95), min_hits=3))
++    return lista
++
++
++# ---------------------------------------------------------------------------- evaluación
++def contar(cand: Candidato, cuadros: list, canales: list[Canal], ancho: int, alto: int,
++           compensar: int = 1) -> dict:
++    """Pasa las detecciones por un seguidor y el contador. Devuelve métricas agregadas."""
++    seg = cand.fabrica()
++    cont = ContadorCanales(canales, min_hits=cand.min_hits, compensar_confirmacion=compensar)
++    ids_vistos: set[int] = set()
++    sin_id = total = 0
++    for i, cajas in enumerate(cuadros):
++        ids = seg.ids(cajas, i, ancho, alto) if len(cajas) else seg.ids(CajasSimples([], []), i, ancho, alto)
++        pts = []
++        for (x, y, _w, _h), tid in zip(cajas.xywh, ids):
++            total += 1
++            if tid is None:
++                sin_id += 1
++                continue
++            ids_vistos.add(tid)
++            pts.append((tid, float(x) / ancho, float(y) / alto))
++        cont.actualizar(i, i / 10, pts)
++    return {"contados": cont.total, "por_canal": dict(cont.conteos), "ids_distintos": len(ids_vistos),
++            "detecciones": total, "detecciones_sin_id": sin_id}
++
++
++def evaluar(cuadros: list, canales: list[Canal], ancho: int, alto: int, esperados: int | None) -> list[dict]:
++    filas = []
++    for cand in candidatos():
++        r = contar(cand, cuadros, canales, ancho, alto)
++        err = None if not esperados else (r["contados"] - esperados) / esperados
++        filas.append({"seguidor": cand.nombre, **r, "esperados": esperados, "error_rel": err})
++    return filas
++
++
++def imprimir(titulo: str, filas: list[dict]) -> None:
++    print(f"\n== {titulo}")
++    print(f"{'seguidor':<44}{'contados':>9}{'error':>9}{'ids':>6}{'sin id':>8}  por canal")
++    for f in filas:
++        err = "" if f["error_rel"] is None else f"{f['error_rel']:+.0%}"
++        print(f"{f['seguidor']:<44}{f['contados']:>9}{err:>9}{f['ids_distintos']:>6}"
++              f"{f['detecciones_sin_id']:>8}  {f['por_canal']}")
++
++
++# ---------------------------------------------------------------------------- entrada
++def cargar_fuente(fuente: Path):
++    """Devuelve (lista de nombres, generador de imágenes BGR) para carpeta o video."""
++    import cv2
++
++    if fuente.is_dir():
++        rutas = sorted(p for p in fuente.iterdir() if p.suffix.lower() in EXT_IMAGEN)
++        if not rutas:
++            raise SystemExit(f"No hay imágenes en {fuente}")
++        return [p.stem for p in rutas], (cv2.imread(str(p)) for p in rutas)
++    cap = cv2.VideoCapture(str(fuente))
++    n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
++
++    def gen():
++        while True:
++            ok, fr = cap.read()
++            if not ok:
++                break
++            yield fr
++        cap.release()
++
++    return [f"{i:06d}" for i in range(n)], gen()
++
++
++def main() -> None:
++    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    p.add_argument("--pesos", required=True)
++    p.add_argument("--fuente", required=True, type=Path)
++    p.add_argument("--canales", required=True, type=Path)
++    p.add_argument("--etiquetas", type=Path, default=None)
++    p.add_argument("--esperados", type=int, default=None)
++    p.add_argument("--conf", type=float, default=0.25)
++    p.add_argument("--imgsz", type=int, default=640)
++    p.add_argument("--salida", type=Path, default=Path("diagnostico/comparacion"))
++    a = p.parse_args()
++
++    from ultralytics import YOLO
++
++    canales = cargar_canales(a.canales)
++    nombres, imagenes = cargar_fuente(a.fuente)
++    modelo = YOLO(a.pesos)
++    cuadros_det, cuadros_gt = [], []
++    ancho = alto = None
++    for nombre, img in zip(nombres, imagenes):
++        alto, ancho = img.shape[:2]
++        r = modelo.predict(img, conf=a.conf, imgsz=a.imgsz, verbose=False)[0]
++        b = r.boxes.cpu().numpy() if r.boxes is not None else None
++        cuadros_det.append(CajasSimples(b.xywh, b.conf, b.cls) if b is not None and len(b) else CajasSimples([], []))
++        if a.etiquetas:
++            cuadros_gt.append(leer_etiquetas_yolo(a.etiquetas / f"{nombre}.txt", ancho, alto))
++
++    filas = [{"entrada": "detector", **f} for f in evaluar(cuadros_det, canales, ancho, alto, a.esperados)]
++    imprimir("Detector real", filas)
++    if cuadros_gt:
++        gt = [{"entrada": "etiquetas (oráculo)", **f} for f in evaluar(cuadros_gt, canales, ancho, alto, a.esperados)]
++        imprimir("Oráculo: cajas etiquetadas (sin errores del detector)", gt)
++        filas += gt
++
++    a.salida.parent.mkdir(parents=True, exist_ok=True)
++    destino = a.salida.with_suffix(".csv")
++    with open(destino, "w", newline="", encoding="utf-8") as f:
++        w = csv.DictWriter(f, fieldnames=list(filas[0].keys()))
++        w.writeheader()
++        for fila in filas:
++            w.writerow({k: (str(v) if isinstance(v, dict) else v) for k, v in fila.items()})
++    print(f"\nGuardado: {destino}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/contador.py b/src/contador.py
+index 539cc06..28fdf19 100644
+--- a/src/contador.py
++++ b/src/contador.py
+@@ -3,8 +3,13 @@
+ Regla (propuesta del grupo, pendiente de confirmar):
+   Un ID suma UNA sola vez en un canal cuando el segmento que une su centro
+   en el cuadro anterior con su centro actual cruza la línea de conteo de
+-  ese canal. Solo se consideran los canales seleccionados, y solo las
+-  detecciones cuyo centro está dentro del polígono del canal.
++  ese canal. Solo se consideran los canales seleccionados.
++
++  Se le deben pasar TODAS las detecciones con id, estén o no dentro del
++  polígono. Así el cruce se detecta aunque el pez salte de un lado a otro de
++  la línea entre dos cuadros, o aunque el detector lo pierda un momento justo
++  en la zona. El polígono solo decide DÓNDE vale un cruce: debe ocurrir dentro
++  del canal (el punto de cruce, o alguno de los dos extremos del movimiento).
+ 
+ Trabaja en coordenadas normalizadas (0 a 1). No depende de YOLO ni de la
+ interfaz: recibe detecciones y devuelve eventos, así sirve igual para las
+@@ -43,6 +48,15 @@ def cruce_de_linea(p1: Punto, p2: Punto, q1: Punto, q2: Punto) -> int | None:
+     return 1 if lado2 else -1
+ 
+ 
++def punto_de_cruce(p1: Punto, p2: Punto, q1: Punto, q2: Punto) -> Punto:
++    """Punto donde la recta p1->p2 corta la recta q1-q2. Solo tiene sentido si
++    cruce_de_linea() ya confirmó que los segmentos se cruzan."""
++    d1 = _orientacion(q1, q2, p1)
++    d2 = _orientacion(q1, q2, p2)
++    t = d1 / (d1 - d2) if d1 != d2 else 0.0
++    return (p1[0] + t * (p2[0] - p1[0]), p1[1] + t * (p2[1] - p1[1]))
++
++
+ @dataclass
+ class Evento:
+     cuadro: int
+@@ -70,11 +84,21 @@ class ContadorCanales:
+ 
+     min_hits: cuadros mínimos en que debe haberse visto un ID antes de que su
+     cruce cuente (filtra pistas fugaces; 1 = sin filtro, que es la base).
++
++    compensar_confirmacion: cuadros que se retrocede, con la velocidad del pez,
++    desde la primera posición que entrega el tracker. ByteTrack no da el id
++    hasta la segunda detección, así que el pez ya avanzó un salto cuando lo
++    vemos por primera vez; si ese salto atravesó la línea, el cruce se
++    reconstruye aquí (0 = desactivado, 1 = lo normal con ByteTrack).
+     """
+ 
+-    def __init__(self, canales: list[Canal], min_hits: int = 1) -> None:
++    def __init__(self, canales: list[Canal], min_hits: int = 1,
++                 compensar_confirmacion: int = 1) -> None:
+         self.canales = [c for c in canales if c.seleccionado]
+         self.min_hits = max(1, int(min_hits))
++        self.compensar_confirmacion = max(0, int(compensar_confirmacion))
++        # Primera posición vista de cada (canal, id), a la espera de la segunda.
++        self._nuevo: dict[tuple[str, int], tuple[Punto, int]] = {}
+         # Todos los canales seleccionados aparecen, aunque tengan 0.
+         self.conteos: dict[str, int] = {c.id: 0 for c in self.canales}
+         self.eventos: list[Evento] = []
+@@ -98,8 +122,26 @@ class ContadorCanales:
+         """Olvida las posiciones previas (usar al saltar a otro cuadro del
+         video). Los conteos y los IDs ya contados se conservan."""
+         self._prev.clear()
++        self._nuevo.clear()
+         self._ultimo_cuadro = None
+ 
++    def _contar_si_cruza(self, c: Canal, tid: int, cuadro: int, tiempo_s: float,
++                         a: Punto, b: Punto, a_dentro: bool, donde: Punto,
++                         donde_dentro: bool, nuevos: list[Evento]) -> None:
++        """Suma un cruce de a -> b si corta la línea del canal, en el sentido
++        pedido y dentro del canal (extremo dentro o punto de cruce dentro)."""
++        sentido = cruce_de_linea(a, b, c.linea[0], c.linea[1])
++        if sentido is None or c.sentido not in (0, sentido):
++            return
++        cruce = punto_de_cruce(a, b, c.linea[0], c.linea[1])
++        if not (a_dentro or donde_dentro or c.contiene(*cruce)):
++            return
++        self._contados.add((c.id, tid))
++        self.conteos[c.id] += 1
++        ev = Evento(cuadro, tiempo_s, c.id, tid, donde[0], donde[1], sentido)
++        self.eventos.append(ev)
++        nuevos.append(ev)
++
+     def actualizar(self, cuadro: int, tiempo_s: float, puntos: list[tuple[int | None, float, float]]) -> list[Evento]:
+         """Procesa un cuadro. `puntos` = lista de (id, x, y) con el centro de
+         cada detección normalizado. Devuelve los eventos nuevos de este cuadro.
+@@ -122,17 +164,24 @@ class ContadorCanales:
+                 clave = (c.id, tid)
+                 dentro = c.contiene(x, y)
+                 previo = self._prev.get(clave)
+-                if previo is None and not dentro:
+-                    continue
+-                if previo is not None and clave not in self._contados:
++                if previo is None:
++                    self._nuevo[clave] = (actual, cuadro)
++                elif clave not in self._contados and self._hits[tid] >= self.min_hits:
+                     (px, py), prev_dentro = previo
+-                    if (dentro or prev_dentro) and self._hits[tid] >= self.min_hits:
+-                        sentido = cruce_de_linea((px, py), actual, c.linea[0], c.linea[1])
+-                        if sentido is not None and c.sentido in (0, sentido):
+-                            self._contados.add(clave)
+-                            self.conteos[c.id] += 1
+-                            ev = Evento(cuadro, tiempo_s, c.id, tid, x, y, sentido)
+-                            self.eventos.append(ev)
+-                            nuevos.append(ev)
++                    # 1) Pez recién confirmado: ¿cruzó la línea en el salto que el
++                    #    tracker no llegó a entregar?
++                    primero = self._nuevo.pop(clave, None)
++                    if (primero is not None and self.compensar_confirmacion
++                            and cuadro == primero[1] + 1):
++                        ant = (px - (x - px) * self.compensar_confirmacion,
++                               py - (y - py) * self.compensar_confirmacion)
++                        self._contar_si_cruza(c, tid, cuadro, tiempo_s, ant, (px, py),
++                                              prev_dentro, (px, py), prev_dentro, nuevos)
++                    # 2) Cruce normal entre la posición anterior y la actual.
++                    if clave not in self._contados:
++                        self._contar_si_cruza(c, tid, cuadro, tiempo_s, (px, py), actual,
++                                              prev_dentro, actual, dentro, nuevos)
++                else:
++                    self._nuevo.pop(clave, None)
+                 self._prev[clave] = (actual, dentro)
+         return nuevos
+diff --git a/src/contar_video.py b/src/contar_video.py
+index 012f3d2..11ea0f6 100644
+--- a/src/contar_video.py
++++ b/src/contar_video.py
+@@ -55,6 +55,7 @@ def ejecutar(
+     max_cuadros: int | None = None,
+     modelo: str = "",
+     parametros: dict | None = None,
++    compensar_confirmacion: int = 1,
+ ) -> dict:
+     """Procesa un video completo. `detector` es cualquier objeto con un método
+     procesar(frame, cuadro) -> list[Deteccion] (así se puede probar sin YOLO)."""
+@@ -80,6 +81,7 @@ def ejecutar(
+         r = ServicioConteo(detector).analizar(
+             str(video), canales, min_hits=min_hits, max_cuadros=max_cuadros,
+             por_cuadro=dibujar_cuadro if anotar else None,
++            compensar_confirmacion=compensar_confirmacion,
+         )
+     finally:
+         if escritor is not None:
+@@ -102,6 +104,10 @@ def main() -> None:
+     p.add_argument("--conf", type=float, default=0.25)
+     p.add_argument("--imgsz", type=int, default=640)
+     p.add_argument("--min-hits", type=int, default=1)
++    p.add_argument("--compensar", type=int, default=1,
++                   help="cuadros que se compensa el retraso de confirmación de ByteTrack (0 = no)")
++    p.add_argument("--tracker", default="bytetrack.yaml",
++                   help="config del tracker, p. ej. configs/bytetrack_sensible.yaml")
+     p.add_argument("--max-cuadros", type=int, default=None)
+     p.add_argument("--sin-video", action="store_true")
+     args = p.parse_args()
+@@ -109,11 +115,13 @@ def main() -> None:
+     from src.detector import Detector
+ 
+     canales = cargar_canales(args.canales)
+-    detector = Detector(args.pesos, conf=args.conf, imgsz=args.imgsz)
++    detector = Detector(args.pesos, conf=args.conf, imgsz=args.imgsz, tracker=args.tracker)
+     res = ejecutar(
+         detector, args.video, canales, args.salida, min_hits=args.min_hits,
+         anotar=not args.sin_video, max_cuadros=args.max_cuadros, modelo=args.pesos,
+-        parametros={"conf": args.conf, "imgsz": args.imgsz},
++        parametros={"conf": args.conf, "imgsz": args.imgsz, "tracker": args.tracker,
++                    "compensar": args.compensar},
++        compensar_confirmacion=args.compensar,
+     )
+     print(json.dumps(res, indent=2, ensure_ascii=False))
+ 
+diff --git a/src/detector.py b/src/detector.py
+index afeb59e..da48df6 100644
+--- a/src/detector.py
++++ b/src/detector.py
+@@ -51,10 +51,19 @@ class Detector:
+         imgsz: int = 640,
+         tracker: str = "bytetrack.yaml",
+         device: str | None = None,
++        seguidor_centros: dict | None = None,
+     ) -> None:
++        """tracker: config de ByteTrack, o "centros" para usar SeguidorCentros (src/seguidor.py),
++        que da el id desde la primera detección y empareja por la posición del centro.
++        seguidor_centros: parámetros opcionales de SeguidorCentros (solo con tracker="centros")."""
+         from ultralytics import YOLO  # import perezoso: acelera el arranque de la app
+ 
+         self.modelo = YOLO(pesos)
++        self._seguidor = None
++        if tracker == "centros":
++            from src.seguidor import SeguidorCentros
++
++            self._seguidor = SeguidorCentros(**(seguidor_centros or {}))
+         self.conf = conf
+         self.imgsz = imgsz
+         self.tracker = tracker
+@@ -64,10 +73,14 @@ class Detector:
+         """Descarta el estado del tracker. Llamar al saltar a otro cuadro del
+         video o al cambiar de video, para no mezclar pistas."""
+         self.modelo.predictor = None
++        if self._seguidor is not None:
++            self._seguidor.reiniciar()
+ 
+     def procesar(self, frame_bgr, cuadro: int) -> list[Deteccion]:
+         """Detecta y sigue peces en un cuadro (imagen BGR de OpenCV)."""
+         alto, ancho = frame_bgr.shape[:2]
++        if self._seguidor is not None:
++            return self._procesar_con_centros(frame_bgr, cuadro, ancho, alto)
+         r = self.modelo.track(
+             frame_bgr,
+             persist=True,
+@@ -88,6 +101,24 @@ class Detector:
+         return salida
+ 
+ 
++    def _procesar_con_centros(self, frame_bgr, cuadro: int, ancho: int, alto: int) -> list[Deteccion]:
++        r = self.modelo.predict(
++            frame_bgr, conf=self.conf, imgsz=self.imgsz, device=self.device, verbose=False
++        )[0]
++        if r.boxes is None or len(r.boxes) == 0:
++            self._seguidor.actualizar(cuadro, [])
++            return []
++        cajas = r.boxes.xyxy.tolist()
++        confs = r.boxes.conf.tolist()
++        ids = self._seguidor.actualizar(
++            cuadro, [((x1 + x2) / 2 / ancho, (y1 + y2) / 2 / alto) for x1, y1, x2, y2 in cajas]
++        )
++        return [
++            Deteccion(cuadro, tid, x1, y1, x2, y2, float(c), ancho, alto)
++            for (x1, y1, x2, y2), c, tid in zip(cajas, confs, ids)
++        ]
++
++
+ def leer_video(ruta: str) -> Iterator[tuple[int, float, object]]:
+     """Genera (cuadro, tiempo_s, imagen_bgr) de un video."""
+     import cv2
+diff --git a/src/diagnostico_conteo.py b/src/diagnostico_conteo.py
+new file mode 100644
+index 0000000..de65d00
+--- /dev/null
++++ b/src/diagnostico_conteo.py
+@@ -0,0 +1,155 @@
++"""Diagnóstico del conteo: explica por qué un video da menos (o más) peces de los esperados.
++
++Corre el detector sobre un video y clasifica cada pista (id) del tracker respecto a la
++línea de cada canal:
++
++  cruza            el pez atravesó la línea: se cuenta
++  nace_pasada      su primera posición con id ya estaba pasada la línea: ningún método
++                   basado en cruce puede contarlo (el tracker lo "descubrió" tarde)
++  muere_antes      el id desapareció antes de llegar a la línea (pista cortada o pez perdido)
++  sin_referencia   no hay ningún pez que cruce, no se sabe qué lado es "pasada"
++
++Además informa el salto típico entre cuadros (si es grande respecto del tubo, los peces
++"saltan" la línea), los huecos dentro de una pista y cuántos peces cuenta el contador con y
++sin compensación del retraso de confirmación.
++
++    uv run python -m src.diagnostico_conteo --pesos weights/exp_01.pt \\
++        --video clip.mp4 --canales canales.json --salida diagnostico/
++"""
++
++from __future__ import annotations
++
++import argparse
++import csv
++import statistics
++from collections import Counter, defaultdict
++from pathlib import Path
++
++from src.canales import Canal, cargar_canales
++from src.contador import ContadorCanales, _orientacion, cruce_de_linea
++
++
++def diagnosticar(detecciones_por_cuadro: dict[int, list], canales: list[Canal],
++                 alto_px: int = 1, ancho_px: int = 1) -> dict:
++    """`detecciones_por_cuadro`: cuadro -> lista de objetos con .id, .cx_n y .cy_n (TODAS las
++    detecciones del cuadro, no solo las que caen dentro de un canal)."""
++    pistas: dict[int, list[tuple[int, float, float]]] = defaultdict(list)
++    for cuadro in sorted(detecciones_por_cuadro):
++        for d in detecciones_por_cuadro[cuadro]:
++            if d.id is not None:
++                pistas[d.id].append((cuadro, d.cx_n, d.cy_n))
++
++    # Cuántos peces cuenta el contador según cuántos cuadros se compense el retraso del tracker.
++    conteos = {}
++    for comp in (0, 1, 2):
++        cont = ContadorCanales(canales, compensar_confirmacion=comp)
++        for cuadro in sorted(detecciones_por_cuadro):
++            cont.actualizar(cuadro, float(cuadro),
++                            [(d.id, d.cx_n, d.cy_n) for d in detecciones_por_cuadro[cuadro]])
++        conteos[comp] = dict(cont.conteos)
++
++    filas, por_estado, pistas_canal, saltos_canal = [], {}, {}, {}
++    huecos_total = 0
++    for c in [c for c in canales if c.seleccionado]:
++        a, b = c.linea
++        y_linea = (a[1] + b[1]) / 2
++        # Una pista pertenece al tubo donde pasa la mitad o más de sus cuadros.
++        propias = {tid: pts for tid, pts in pistas.items()
++                   if sum(c.contiene(p[1], p[2]) for p in pts) * 2 >= len(pts)}
++        estado: dict[int, str] = {}
++        # Lado de destino de la línea: hacia donde avanza la mayoría de las pistas
++        # (no se usa quién cruza, para poder clasificar también un tubo sin cruces).
++        hacia = Counter(
++            _orientacion(a, b, pts[-1][1:]) > _orientacion(a, b, pts[0][1:])
++            for pts in propias.values() if len(pts) > 1
++        )
++        destino = hacia.most_common(1)[0][0] if hacia else None
++        for tid, pts in propias.items():
++            if any(cruce_de_linea((p[1], p[2]), (q[1], q[2]), a, b) is not None
++                   for p, q in zip(pts, pts[1:])):
++                estado[tid] = "cruza"
++        saltos, filas_canal = [], []
++        for tid, pts in propias.items():
++            if tid not in estado:
++                if destino is None:
++                    estado[tid] = "sin_referencia"
++                else:
++                    primer_lado = _orientacion(a, b, pts[0][1:]) >= 0
++                    estado[tid] = "nace_pasada" if primer_lado == destino else "muere_antes"
++            huecos = sum(q[0] - p[0] - 1 for p, q in zip(pts, pts[1:]) if q[0] - p[0] > 1)
++            huecos_total += huecos
++            paso = [abs(q[2] - p[2]) * alto_px for p, q in zip(pts, pts[1:]) if q[0] - p[0] == 1]
++            saltos += paso
++            filas_canal.append({
++                "canal": c.id, "id": tid, "estado": estado[tid],
++                "cuadro_ini": pts[0][0], "cuadro_fin": pts[-1][0], "cuadros": len(pts),
++                "cuadros_perdidos": huecos,
++                "y_ini_px": round(pts[0][2] * alto_px, 1), "y_fin_px": round(pts[-1][2] * alto_px, 1),
++                "y_linea_px": round(y_linea * alto_px, 1),
++                "salto_max_px": round(max(paso), 1) if paso else 0.0,
++                "saltos_pasada": "",
++            })
++        salto_med = statistics.median(saltos) if saltos else 0.0
++        for f in filas_canal:
++            # A cuántos saltos de la línea quedó la primera posición con id de una pista
++            # "nace_pasada": 1 a 2 saltos = la compensación puede rescatarla; mucho más =
++            # el detector o el tracker no la vio al entrar al tubo.
++            if f["estado"] == "nace_pasada" and salto_med:
++                f["saltos_pasada"] = round(abs(f["y_ini_px"] - f["y_linea_px"]) / salto_med, 1)
++        filas += filas_canal
++        pistas_canal[c.id] = len(propias)
++        saltos_canal[c.id] = round(salto_med, 1)
++        por_estado[c.id] = dict(Counter(f["estado"] for f in filas_canal))
++    resumen = {
++        "pistas_total": len(pistas),
++        "pistas_por_canal": pistas_canal,
++        "por_estado": por_estado,
++        "salto_mediano_px": saltos_canal,
++        "cuadros_perdidos_en_pistas": huecos_total,
++        "conteo_sin_compensar": conteos[0],
++        "conteo_compensando_1_cuadro": conteos[1],
++        "conteo_compensando_2_cuadros": conteos[2],
++    }
++    return {"resumen": resumen, "pistas": filas}
++
++
++def main() -> None:
++    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    p.add_argument("--pesos", required=True)
++    p.add_argument("--video", required=True)
++    p.add_argument("--canales", required=True, help="JSON de canales del Tracker")
++    p.add_argument("--salida", default="diagnostico")
++    p.add_argument("--conf", type=float, default=0.25)
++    p.add_argument("--imgsz", type=int, default=640)
++    p.add_argument("--tracker", default="bytetrack.yaml",
++                   help="config del tracker, p. ej. configs/bytetrack_sensible.yaml")
++    p.add_argument("--max-cuadros", type=int, default=None)
++    args = p.parse_args()
++
++    from src.detector import Detector, leer_video  # YOLO se carga solo aquí
++
++    canales = cargar_canales(args.canales)
++    detector = Detector(args.pesos, conf=args.conf, imgsz=args.imgsz, tracker=args.tracker)
++    por_cuadro: dict[int, list] = {}
++    alto = ancho = 1
++    for cuadro, _t, frame in leer_video(args.video):
++        if args.max_cuadros is not None and cuadro >= args.max_cuadros:
++            break
++        dets = detector.procesar(frame, cuadro)
++        por_cuadro[cuadro] = dets
++        alto, ancho = frame.shape[:2]
++
++    r = diagnosticar(por_cuadro, canales, alto_px=alto, ancho_px=ancho)
++    salida = Path(args.salida)
++    salida.mkdir(parents=True, exist_ok=True)
++    with open(salida / "pistas.csv", "w", newline="", encoding="utf-8") as f:
++        w = csv.DictWriter(f, fieldnames=list(r["pistas"][0].keys()) if r["pistas"] else ["canal"])
++        w.writeheader()
++        w.writerows(r["pistas"])
++    for k, v in r["resumen"].items():
++        print(f"{k}: {v}")
++    print(f"Detalle por pista en {salida / 'pistas.csv'}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/seguidor.py b/src/seguidor.py
+new file mode 100644
+index 0000000..0a6bed7
+--- /dev/null
++++ b/src/seguidor.py
+@@ -0,0 +1,125 @@
++"""Seguidor por posición del centro: asigna un id a cada pez desde la PRIMERA detección.
++
++Por qué existe
++--------------
++ByteTrack (ultralytics) solo muestra el id de un pez nuevo si, en el cuadro siguiente, su caja
++se solapa lo suficiente con la anterior (umbral fijo, sin velocidad todavía). Cuando el pez salta
++casi su propio largo entre cuadros (videos armados con secuencias de pocos fps), ese solape casi
++no existe: el pez nunca se "confirma", los ids se gastan y el conteo se desploma.
++Este seguidor no usa el solape de las cajas: empareja por la posición del centro, aprovechando
++que los peces avanzan por el tubo en línea casi recta y a un ritmo parecido.
++
++Reglas (todo en coordenadas normalizadas, 0 a 1):
++  - Un pista nueva recibe id en su primera detección (no hay confirmación).
++  - Con una sola posición conocida, el pez puede estar a hasta `salto_max` de altura y
++    `holgura_x` de ancho de donde se vio por última vez.
++  - Con dos o más posiciones se predice con su velocidad y se acepta un error pequeño.
++  - Una pista sin detección se conserva `max_perdido` cuadros y se descarta.
++  - Los emparejamientos se hacen de menor a mayor costo (voraz): es simple y determinista.
++
++No depende de YOLO: recibe centros y devuelve ids, así se prueba sin modelo.
++"""
++
++from __future__ import annotations
++
++import math
++from dataclasses import dataclass
++
++
++@dataclass
++class _Pista:
++    id: int
++    x: float
++    y: float
++    cuadro: int  # último cuadro en que se vio
++    vx: float = 0.0
++    vy: float = 0.0
++    golpes: int = 1  # cuadros en que se ha visto
++
++
++class SeguidorCentros:
++    """Asigna ids estables a detecciones por posición del centro (ver módulo)."""
++
++    def __init__(
++        self,
++        max_perdido: int = 3,
++        salto_max: float = 0.30,
++        holgura_x: float = 0.06,
++        tolerancia_min: float = 0.04,
++        tolerancia_rel: float = 0.4,
++    ) -> None:
++        """
++        max_perdido     cuadros seguidos sin detección antes de descartar una pista.
++        salto_max       avance máximo entre dos cuadros para una pista que aún no tiene
++                        velocidad (fracción de la altura).
++        holgura_x       desvío lateral máximo (fracción del ancho).
++        tolerancia_min  error mínimo aceptado frente a la posición predicha (fracción de la altura).
++        tolerancia_rel  parte de la velocidad que se acepta además como error (0,4 = 40 %).
++        """
++        self.max_perdido = int(max_perdido)
++        self.salto_max = salto_max
++        self.holgura_x = holgura_x
++        self.tolerancia_min = tolerancia_min
++        self.tolerancia_rel = tolerancia_rel
++        self._pistas: list[_Pista] = []
++        self._siguiente_id = 1
++
++    def reiniciar(self) -> None:
++        """Descarta todas las pistas (al cambiar de video o saltar de cuadro).
++        Los ids siguen creciendo para no repetirse."""
++        self._pistas = []
++
++    def _costo(self, p: _Pista, x: float, y: float, cuadro: int) -> float | None:
++        """Costo de asignar la detección (x, y) a la pista, o None si no es posible."""
++        dt = cuadro - p.cuadro
++        if p.golpes >= 2:
++            px, py = p.x + p.vx * dt, p.y + p.vy * dt
++            tol_y = max(self.tolerancia_min, self.tolerancia_rel * abs(p.vy * dt))
++            tol_x = self.holgura_x
++        else:
++            px, py = p.x, p.y
++            tol_y = self.salto_max * dt
++            tol_x = self.holgura_x
++        rx, ry = x - px, y - py
++        if abs(rx) > tol_x or abs(ry) > tol_y:
++            return None
++        return math.hypot(rx / tol_x, ry / tol_y)
++
++    def actualizar(self, cuadro: int, centros: list[tuple[float, float]]) -> list[int]:
++        """Procesa un cuadro. `centros` = lista de (x, y) normalizados. Devuelve el id de
++        cada detección, en el mismo orden."""
++        # Pistas demasiado viejas, fuera.
++        self._pistas = [p for p in self._pistas if cuadro - p.cuadro <= self.max_perdido + 1]
++
++        candidatos = []
++        for i, (x, y) in enumerate(centros):
++            for j, p in enumerate(self._pistas):
++                if p.cuadro >= cuadro:  # misma pista ya usada este cuadro (o cuadro repetido)
++                    continue
++                c = self._costo(p, x, y, cuadro)
++                if c is not None:
++                    candidatos.append((c, i, j))
++        candidatos.sort()
++
++        ids: list[int | None] = [None] * len(centros)
++        usadas: set[int] = set()
++        for _c, i, j in candidatos:
++            if ids[i] is not None or j in usadas:
++                continue
++            p = self._pistas[j]
++            x, y = centros[i]
++            dt = cuadro - p.cuadro
++            vx, vy = (x - p.x) / dt, (y - p.y) / dt
++            if p.golpes >= 2:  # suaviza el ritmo para que un salto raro no lo descoloque
++                vx, vy = 0.5 * p.vx + 0.5 * vx, 0.5 * p.vy + 0.5 * vy
++            p.x, p.y, p.vx, p.vy, p.cuadro = x, y, vx, vy, cuadro
++            p.golpes += 1
++            ids[i] = p.id
++            usadas.add(j)
++
++        for i, (x, y) in enumerate(centros):
++            if ids[i] is None:
++                self._pistas.append(_Pista(self._siguiente_id, x, y, cuadro))
++                ids[i] = self._siguiente_id
++                self._siguiente_id += 1
++        return ids  # type: ignore[return-value]
+diff --git a/src/servicio.py b/src/servicio.py
+index 0e9ba9a..6a0cd01 100644
+--- a/src/servicio.py
++++ b/src/servicio.py
+@@ -79,6 +79,7 @@ class ServicioConteo:
+         progreso: Callable[[int, int], None] | None = None,
+         por_cuadro: Callable | None = None,
+         max_cuadros: int | None = None,
++        compensar_confirmacion: int = 1,
+     ) -> ResultadoAnalisis:
+         """Procesa el video completo.
+ 
+@@ -114,7 +115,8 @@ class ServicioConteo:
+         # Todo análisis parte de cero: contador nuevo y tracker limpio.
+         self._cancelar.clear()
+         self._continuar.set()
+-        contador = ContadorCanales(canales, min_hits=min_hits)
++        contador = ContadorCanales(canales, min_hits=min_hits,
++                                   compensar_confirmacion=compensar_confirmacion)
+         self._reiniciar_detector()
+ 
+         detecciones: dict[int, list[Deteccion]] = {}
+@@ -140,7 +142,9 @@ class ServicioConteo:
+                         "canal": canal, "x1": round(d.x1, 1), "y1": round(d.y1, 1),
+                         "x2": round(d.x2, 1), "y2": round(d.y2, 1), "conf": round(d.conf, 3),
+                     })
+-                contador.actualizar(cuadro, tiempo, [(d.id, d.cx_n, d.cy_n) for d in en_canal])
++                # Al contador van TODAS las detecciones (ver contador.py); la exportación y el
++                # dibujo siguen usando solo las que caen dentro de un canal.
++                contador.actualizar(cuadro, tiempo, [(d.id, d.cx_n, d.cy_n) for d in dets])
+                 if en_canal:
+                     detecciones[cuadro] = en_canal
+                 if por_cuadro is not None:
+diff --git a/tests/test_conteo_robusto.py b/tests/test_conteo_robusto.py
+new file mode 100644
+index 0000000..abbbc92
+--- /dev/null
++++ b/tests/test_conteo_robusto.py
+@@ -0,0 +1,172 @@
++"""Pruebas del conteo cuando el pez salta mucho entre cuadros o el tracker tarda en confirmarlo.
++
++Casos reales vistos en los videos armados con las secuencias del Lab 15: el pez avanza
++~80 px por cuadro, la caja del tubo es chica (último cuarto) y el detector pierde cuadros.
++"""
++
++import cv2
++import numpy as np
++import pytest
++
++from src.canales import Canal
++from src.contador import ContadorCanales, punto_de_cruce
++from src.detector import Deteccion
++from src.servicio import ServicioConteo
++
++# Caja chica: solo el tramo 0.70-0.80 de la altura. Su línea por defecto queda en y=0.75.
++CAJA_CHICA = Canal("a", "A", [(0.3, 0.70), (0.5, 0.70), (0.5, 0.80), (0.3, 0.80)])
++
++
++def mover(contador, id_, x, ys, inicio=0):
++    for i, y in enumerate(ys):
++        contador.actualizar(inicio + i, (inicio + i) / 10, [(id_, x, y)])
++
++
++def test_punto_de_cruce():
++    assert punto_de_cruce((0.4, 0.5), (0.4, 0.9), (0.3, 0.75), (0.5, 0.75)) == pytest.approx((0.4, 0.75))
++
++
++def test_cuenta_si_el_pez_salta_la_linea_sin_detecciones_dentro_de_la_caja():
++    # y=0.5 -> 0.9: ninguna detección cae en la caja, pero el movimiento corta la línea.
++    c = ContadorCanales([CAJA_CHICA])
++    mover(c, 1, 0.4, [0.3, 0.5, 0.9])
++    assert c.conteos == {"a": 1}
++
++
++def test_cuenta_si_el_detector_pierde_el_cuadro_dentro_de_la_caja():
++    c = ContadorCanales([CAJA_CHICA])
++    c.actualizar(0, 0.0, [(1, 0.4, 0.5)])
++    c.actualizar(1, 0.1, [(1, 0.4, 0.72)])   # dentro de la caja, antes de la línea
++    # cuadros 2 y 3: el detector no ve al pez
++    c.actualizar(4, 0.4, [(1, 0.4, 0.95)])   # ya pasó la línea y salió de la caja
++    assert c.conteos == {"a": 1}
++
++
++def test_un_cruce_fuera_del_canal_no_cuenta():
++    # Línea más ancha que el tubo: cruzarla en x=0.7 queda fuera del canal (x 0 a 0.4).
++    tubo = Canal("a", "A", [(0.0, 0.0), (0.4, 0.0), (0.4, 1.0), (0.0, 1.0)],
++                 linea=((0.0, 0.5), (1.0, 0.5)))
++    c = ContadorCanales([tubo])
++    mover(c, 1, 0.7, [0.3, 0.7])
++    assert c.total == 0
++    mover(c, 2, 0.2, [0.3, 0.7], inicio=10)
++    assert c.total == 1
++
++
++def test_no_cuenta_dos_veces_aunque_pase_por_fuera_y_por_dentro():
++    c = ContadorCanales([CAJA_CHICA])
++    mover(c, 1, 0.4, [0.3, 0.9, 0.5, 0.9])
++    assert c.total == 1
++
++
++def test_compensa_el_retraso_de_confirmacion_del_tracker():
++    # El tracker entrega el id recién en y=0.55 (línea en 0.5), pero con saltos de 0.1
++    # el pez estaba en 0.45 un cuadro antes: cruzó la línea sin que lo viéramos.
++    ys = [0.55, 0.65, 0.75]
++    con = ContadorCanales([Canal("a", "A", [(0, 0), (1, 0), (1, 1), (0, 1)])])
++    mover(con, 1, 0.5, ys)
++    assert con.total == 1 and con.eventos[0].id == 1
++    sin = ContadorCanales([Canal("a", "A", [(0, 0), (1, 0), (1, 1), (0, 1)])], compensar_confirmacion=0)
++    mover(sin, 1, 0.5, ys)
++    assert sin.total == 0
++
++
++def test_un_pez_que_aparece_ya_pasada_la_linea_no_se_cuenta():
++    # Su primera posición con id es 0.70 y se retrocede un salto (0.60): sigue pasada la línea.
++    c = ContadorCanales([Canal("a", "A", [(0, 0), (1, 0), (1, 1), (0, 1)])])
++    mover(c, 1, 0.5, [0.70, 0.80, 0.90])
++    assert c.total == 0
++
++
++def test_la_compensacion_respeta_el_sentido_del_canal():
++    tubo = [(0, 0), (1, 0), (1, 1), (0, 1)]
++    ys = [0.55, 0.65, 0.75]  # el pez baja; el cruce reconstruido ocurre en el salto 0.45 -> 0.55
++    libre = ContadorCanales([Canal("a", "A", tubo, sentido=0)])
++    mover(libre, 1, 0.5, ys)
++    sentido_de_bajada = libre.eventos[0].sentido
++
++    igual = ContadorCanales([Canal("a", "A", tubo, sentido=sentido_de_bajada)])
++    mover(igual, 1, 0.5, ys)
++    assert igual.total == 1
++
++    opuesto = ContadorCanales([Canal("a", "A", tubo, sentido=-sentido_de_bajada)])
++    mover(opuesto, 1, 0.5, ys)
++    assert opuesto.total == 0
++
++
++def test_compensacion_requiere_cuadros_consecutivos():
++    # Si entre las dos primeras posiciones faltan cuadros, la velocidad no es confiable.
++    c = ContadorCanales([Canal("a", "A", [(0, 0), (1, 0), (1, 1), (0, 1)])])
++    c.actualizar(0, 0.0, [(1, 0.5, 0.55)])
++    c.actualizar(5, 0.5, [(1, 0.5, 0.65)])
++    assert c.total == 0
++
++
++# -- a través del servicio: el contador debe recibir TODAS las detecciones ------------------
++
++class DetectorSaltarin:
++    """Un pez que baja 100 px por cuadro en un video de 240 px de alto."""
++
++    def procesar(self, frame, cuadro):
++        alto, ancho = frame.shape[:2]
++        y = 10 + cuadro * 100  # 10, 110, 210
++        if y >= alto:
++            return []
++        return [Deteccion(cuadro, 7, 30, y - 5, 50, y + 5, 0.9, ancho, alto)]
++
++    def reiniciar(self):
++        pass
++
++
++def test_servicio_cuenta_con_una_caja_que_el_pez_casi_no_pisa(tmp_path):
++    ruta = tmp_path / "v.mp4"
++    w = cv2.VideoWriter(str(ruta), cv2.VideoWriter_fourcc(*"mp4v"), 10, (320, 240))
++    for _ in range(4):
++        w.write(np.zeros((240, 320, 3), np.uint8))
++    w.release()
++    # La caja cubre solo 0.44-0.56 de la altura: el pez cae dentro en un único cuadro (y=110).
++    caja = Canal("tubo_1", "Tubo 1", [(0.0, 0.44), (1.0, 0.44), (1.0, 0.56), (0.0, 0.56)])
++    r = ServicioConteo(DetectorSaltarin()).analizar(str(ruta), [caja])
++    assert r.conteos == {"tubo_1": 1}
++
++
++# -- diagnóstico -----------------------------------------------------------------------------
++
++def test_diagnostico_clasifica_las_pistas():
++    from types import SimpleNamespace as D
++    from src.diagnostico_conteo import diagnosticar
++
++    tubo = Canal("a", "A", [(0, 0), (1, 0), (1, 1), (0, 1)])  # línea en y=0.5
++
++    def pista(tid, ys, inicio=0):
++        return {inicio + i: D(id=tid, cx_n=0.5, cy_n=y) for i, y in enumerate(ys)}
++
++    por_cuadro: dict[int, list] = {}
++    for dic in (pista(1, [0.1, 0.3, 0.6, 0.8]),        # cruza
++                pista(2, [0.62, 0.72, 0.82, 0.92]),     # nace pasada la línea
++                pista(3, [0.05, 0.15, 0.25])):           # muere antes de la línea
++        for cuadro, d in dic.items():
++            por_cuadro.setdefault(cuadro, []).append(d)
++
++    r = diagnosticar(por_cuadro, [tubo], alto_px=1000)
++    estados = {f["id"]: f["estado"] for f in r["pistas"]}
++    assert estados == {1: "cruza", 2: "nace_pasada", 3: "muere_antes"}
++    assert r["resumen"]["conteo_sin_compensar"] == {"a": 1}
++    assert r["resumen"]["salto_mediano_px"]["a"] == pytest.approx(100.0, abs=25)
++    pasada = next(f for f in r["pistas"] if f["id"] == 2)
++    assert pasada["saltos_pasada"] == pytest.approx(1.2, abs=0.6)  # nace ~1 salto pasada la línea
++
++
++def test_diagnostico_asigna_cada_pista_a_su_tubo():
++    from types import SimpleNamespace as D
++    from src.diagnostico_conteo import diagnosticar
++
++    a = Canal("a", "A", [(0.0, 0.0), (0.4, 0.0), (0.4, 1.0), (0.0, 1.0)])
++    b = Canal("b", "B", [(0.6, 0.0), (1.0, 0.0), (1.0, 1.0), (0.6, 1.0)])
++    por_cuadro: dict[int, list] = {}
++    for tid, x, ys in ((1, 0.2, [0.1, 0.3, 0.7, 0.9]), (2, 0.8, [0.1, 0.2, 0.3])):
++        for i, y in enumerate(ys):
++            por_cuadro.setdefault(i, []).append(D(id=tid, cx_n=x, cy_n=y))
++    r = diagnosticar(por_cuadro, [a, b], alto_px=1000)
++    assert r["resumen"]["pistas_por_canal"] == {"a": 1, "b": 1}
++    assert r["resumen"]["por_estado"] == {"a": {"cruza": 1}, "b": {"muere_antes": 1}}
+diff --git a/tests/test_seguidor.py b/tests/test_seguidor.py
+new file mode 100644
+index 0000000..0aa6359
+--- /dev/null
++++ b/tests/test_seguidor.py
+@@ -0,0 +1,105 @@
++"""Pruebas del seguidor por posición del centro (src/seguidor.py).
++
++Casos pensados para videos donde el pez salta casi su propio largo entre cuadros: aquí lo que
++importa es la posición del centro, no el solape de las cajas.
++"""
++
++from src.canales import Canal
++from src.contador import ContadorCanales
++from src.seguidor import SeguidorCentros
++
++
++def recorrer(seg, x, ys, inicio=0):
++    """Pasa un pez por el seguidor (un cuadro por posición) y devuelve sus ids."""
++    return [seg.actualizar(inicio + i, [(x, y)])[0] for i, y in enumerate(ys)]
++
++
++def test_un_pez_con_saltos_grandes_conserva_su_id():
++    seg = SeguidorCentros()
++    ids = recorrer(seg, 0.3, [0.05, 0.17, 0.30, 0.41, 0.55, 0.66, 0.79, 0.90])  # ~0.12 por cuadro
++    assert len(set(ids)) == 1
++
++
++def test_el_id_existe_desde_la_primera_deteccion():
++    seg = SeguidorCentros()
++    assert seg.actualizar(0, [(0.3, 0.1)]) == [1]
++
++
++def test_peces_en_tubos_distintos_tienen_ids_distintos():
++    seg = SeguidorCentros()
++    for i, (ya, yb) in enumerate([(0.1, 0.5), (0.2, 0.6), (0.3, 0.7)]):
++        ids = seg.actualizar(i, [(0.25, ya), (0.72, yb)])
++    assert ids[0] != ids[1]
++    assert ids == [1, 2]
++
++
++def test_dos_peces_en_el_mismo_tubo_no_intercambian_ids():
++    seg = SeguidorCentros()
++    for i in range(5):
++        ids = seg.actualizar(i, [(0.3, 0.05 + 0.1 * i), (0.3, 0.50 + 0.1 * i)])
++    assert ids == [1, 2]
++
++
++def test_un_pez_que_viene_detras_no_roba_el_id_si_ya_se_conoce_la_velocidad():
++    seg = SeguidorCentros()
++    seg.actualizar(0, [(0.3, 0.30)])
++    seg.actualizar(1, [(0.3, 0.40)])  # velocidad conocida: 0,1 por cuadro
++    ids = seg.actualizar(2, [(0.3, 0.50), (0.3, 0.35)])  # el segundo viene 0,15 detrás
++    assert ids[0] == 1
++    assert ids[1] not in (1, None)
++
++
++def test_la_pista_sobrevive_a_cuadros_perdidos_y_luego_se_descarta():
++    seg = SeguidorCentros(max_perdido=2)
++    seg.actualizar(0, [(0.3, 0.10)])
++    seg.actualizar(1, [(0.3, 0.20)])
++    seg.actualizar(2, [])
++    seg.actualizar(3, [])
++    assert seg.actualizar(4, [(0.3, 0.50)]) == [1]  # 2 cuadros perdidos: sigue siendo el mismo pez
++    seg2 = SeguidorCentros(max_perdido=2)
++    seg2.actualizar(0, [(0.3, 0.10)])
++    seg2.actualizar(1, [(0.3, 0.20)])
++    assert seg2.actualizar(6, [(0.3, 0.30)]) == [2]  # pasaron demasiados cuadros: pez nuevo
++
++
++def test_un_salto_mayor_al_maximo_crea_un_pez_nuevo():
++    seg = SeguidorCentros(salto_max=0.30)
++    seg.actualizar(0, [(0.3, 0.10)])
++    assert seg.actualizar(1, [(0.3, 0.60)]) == [2]
++
++
++def test_un_desvio_lateral_grande_crea_un_pez_nuevo():
++    seg = SeguidorCentros(holgura_x=0.06)
++    seg.actualizar(0, [(0.30, 0.10)])
++    assert seg.actualizar(1, [(0.45, 0.20)]) == [2]
++
++
++def test_reiniciar_descarta_pistas_pero_no_repite_ids():
++    seg = SeguidorCentros()
++    assert seg.actualizar(0, [(0.3, 0.1)]) == [1]
++    seg.reiniciar()
++    assert seg.actualizar(1, [(0.3, 0.2)]) == [2]
++
++
++def test_cuenta_con_el_contador_un_pez_que_salta_la_linea():
++    tubo = Canal("a", "A", [(0, 0), (1, 0), (1, 1), (0, 1)])  # línea en y=0.5
++    seg = SeguidorCentros()
++    cont = ContadorCanales([tubo], compensar_confirmacion=0)
++    for i, y in enumerate([0.05, 0.20, 0.36, 0.52, 0.68, 0.83, 0.98]):  # salta ~0,16 por cuadro
++        ids = seg.actualizar(i, [(0.5, y)])
++        cont.actualizar(i, i / 10, [(ids[0], 0.5, y)])
++    assert cont.conteos == {"a": 1}
++    assert len(cont.eventos) == 1
++
++
++def test_min_hits_descarta_detecciones_sueltas_que_se_encadenan():
++    # Dos falsos positivos seguidos a ambos lados de la línea parecen un pez que cruza;
++    # con min_hits=3 no cuentan, con min_hits=1 sí.
++    tubo = Canal("a", "A", [(0, 0), (1, 0), (1, 1), (0, 1)])
++    for min_hits, esperado in ((1, 1), (3, 0)):
++        seg = SeguidorCentros()
++        cont = ContadorCanales([tubo], min_hits=min_hits, compensar_confirmacion=0)
++        for i, y in enumerate([0.42, 0.58]):
++            ids = seg.actualizar(i, [(0.5, y)])
++            cont.actualizar(i, i / 10, [(ids[0], 0.5, y)])
++        assert cont.total == esperado
+-- 
+2.43.0
+

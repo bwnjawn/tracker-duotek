@@ -1,0 +1,178 @@
+From 723e3f53cdbea31029ba5e07020f683f4d76abe7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 22 Nov 2026 15:17:11 -0300
+Subject: [PATCH] Conteo: SeguidorCentros con min_hits=3 como predeterminado en
+ la app y la linea de comandos
+
+Evidencia (seq_0003, 10 peces, comparar_seguidores):
+- Con cajas etiquetadas (sin errores del detector) ByteTrack por defecto cuenta 7/10:
+  el fallo es del seguidor, no del detector.
+- Con el detector real: ByteTrack 5-8/10; Centros 10/10 (secuencia y video coinciden).
+- Con etiquetas, Centros min_hits=3 da 10 y min_hits 1-2 da 11.
+
+Cambios: Detector(tracker="centros") en la app; min_hits=3 por defecto en ServicioConteo
+y contar_video; --tracker centros por defecto en la CLI (ByteTrack sigue disponible).
+Pruebas del Detector con modelo falso (113 pasan).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KaqjLSAQuh77qfNPFzhqoW
+---
+ interfaz/ventana_principal.py  |  4 +-
+ src/contar_video.py            |  9 +++--
+ src/detector.py                |  1 -
+ src/servicio.py                |  2 +-
+ tests/test_detector_centros.py | 73 ++++++++++++++++++++++++++++++++++
+ 5 files changed, 82 insertions(+), 7 deletions(-)
+ create mode 100644 tests/test_detector_centros.py
+
+diff --git a/interfaz/ventana_principal.py b/interfaz/ventana_principal.py
+index 0975f69..9753ef8 100644
+--- a/interfaz/ventana_principal.py
++++ b/interfaz/ventana_principal.py
+@@ -72,7 +72,9 @@ def crear_detector_real():
+         )
+     from src.detector import Detector  # import perezoso: torch tarda en cargar
+ 
+-    return Detector(str(PESOS_DEFECTO))
++    # "centros": seguidor por posición del centro (src/seguidor.py). ByteTrack no confirmaba
++    # a los peces que saltan casi su largo entre cuadros y subcontaba (ver docs/).
++    return Detector(str(PESOS_DEFECTO), tracker="centros")
+ 
+ 
+ class VentanaPrincipal(QMainWindow):
+diff --git a/src/contar_video.py b/src/contar_video.py
+index 11ea0f6..71272cf 100644
+--- a/src/contar_video.py
++++ b/src/contar_video.py
+@@ -50,7 +50,7 @@ def ejecutar(
+     video: str,
+     canales: list[Canal],
+     salida: str | Path,
+-    min_hits: int = 1,
++    min_hits: int = 3,
+     anotar: bool = True,
+     max_cuadros: int | None = None,
+     modelo: str = "",
+@@ -103,11 +103,12 @@ def main() -> None:
+     p.add_argument("--salida", required=True)
+     p.add_argument("--conf", type=float, default=0.25)
+     p.add_argument("--imgsz", type=int, default=640)
+-    p.add_argument("--min-hits", type=int, default=1)
++    p.add_argument("--min-hits", type=int, default=3,
++                   help="cuadros mínimos en que debe verse un pez antes de contarlo (3 descarta falsos positivos sueltos)")
+     p.add_argument("--compensar", type=int, default=1,
+                    help="cuadros que se compensa el retraso de confirmación de ByteTrack (0 = no)")
+-    p.add_argument("--tracker", default="bytetrack.yaml",
+-                   help="config del tracker, p. ej. configs/bytetrack_sensible.yaml")
++    p.add_argument("--tracker", default="centros",
++                   help="\"centros\" (por defecto) o una config de ByteTrack, p. ej. configs/bytetrack_sensible.yaml")
+     p.add_argument("--max-cuadros", type=int, default=None)
+     p.add_argument("--sin-video", action="store_true")
+     args = p.parse_args()
+diff --git a/src/detector.py b/src/detector.py
+index da48df6..ccd8d38 100644
+--- a/src/detector.py
++++ b/src/detector.py
+@@ -100,7 +100,6 @@ class Detector:
+             salida.append(Deteccion(cuadro, tid, x1, y1, x2, y2, float(c), ancho, alto))
+         return salida
+ 
+-
+     def _procesar_con_centros(self, frame_bgr, cuadro: int, ancho: int, alto: int) -> list[Deteccion]:
+         r = self.modelo.predict(
+             frame_bgr, conf=self.conf, imgsz=self.imgsz, device=self.device, verbose=False
+diff --git a/src/servicio.py b/src/servicio.py
+index 6a0cd01..f5a7fc6 100644
+--- a/src/servicio.py
++++ b/src/servicio.py
+@@ -75,7 +75,7 @@ class ServicioConteo:
+         self,
+         video: str,
+         canales: list[Canal],
+-        min_hits: int = 1,
++        min_hits: int = 3,
+         progreso: Callable[[int, int], None] | None = None,
+         por_cuadro: Callable | None = None,
+         max_cuadros: int | None = None,
+diff --git a/tests/test_detector_centros.py b/tests/test_detector_centros.py
+new file mode 100644
+index 0000000..72dd039
+--- /dev/null
++++ b/tests/test_detector_centros.py
+@@ -0,0 +1,73 @@
++"""Detector con tracker="centros": usa un modelo falso (sin YOLO ni torch)."""
++
++from types import SimpleNamespace
++
++from src.detector import Detector
++from src.seguidor import SeguidorCentros
++
++
++class _Lista(list):
++    def tolist(self):
++        return list(self)
++
++
++class _ModeloFalso:
++    """predict() devuelve, por cada llamada, las cajas (x1, y1, x2, y2) indicadas."""
++
++    def __init__(self, cuadros):
++        self._cuadros = iter(cuadros)
++        self.predictor = "algo"
++
++    def predict(self, frame, **kw):
++        return [SimpleNamespace(boxes=_Cajas(next(self._cuadros)))]
++
++
++class _Cajas:
++    def __init__(self, cajas):
++        self.xyxy = _Lista(cajas)
++        self.conf = _Lista([0.9] * len(cajas))
++        self.id = None
++        self._n = len(cajas)
++
++    def __len__(self):
++        return self._n
++
++
++def _detector(cuadros):
++    d = Detector.__new__(Detector)
++    d.modelo = _ModeloFalso(cuadros)
++    d._seguidor = SeguidorCentros()
++    d.conf, d.imgsz, d.tracker, d.device = 0.25, 640, "centros", None
++    return d
++
++
++class _Frame:
++    shape = (1000, 1000, 3)
++
++
++def test_da_id_desde_la_primera_deteccion_y_lo_mantiene():
++    # Un pez que avanza 0,12 de la altura por cuadro: sin solape entre cajas consecutivas.
++    cuadros = [[(450, 100 + 120 * i, 550, 150 + 120 * i)] for i in range(5)]
++    d = _detector(cuadros)
++    ids = [d.procesar(_Frame(), i)[0].id for i in range(5)]
++    assert ids[0] is not None and len(set(ids)) == 1
++
++
++def test_cuadro_sin_detecciones_devuelve_lista_vacia_y_no_rompe():
++    d = _detector([[], [(450, 100, 550, 150)]])
++    assert d.procesar(_Frame(), 0) == []
++    assert d.procesar(_Frame(), 1)[0].id is not None
++
++
++def test_la_deteccion_conserva_caja_confianza_y_tamano_del_cuadro():
++    d = _detector([[(400, 100, 500, 200)]])
++    det = d.procesar(_Frame(), 7)[0]
++    assert (det.cuadro, det.x1, det.y2, det.conf, det.ancho, det.alto) == (7, 400, 200, 0.9, 1000, 1000)
++
++
++def test_reiniciar_descarta_pistas_y_no_repite_ids():
++    d = _detector([[(450, 100, 550, 150)], [(450, 220, 550, 270)]])
++    primero = d.procesar(_Frame(), 0)[0].id
++    d.reiniciar()
++    assert d.modelo.predictor is None
++    assert d.procesar(_Frame(), 1)[0].id != primero
+-- 
+2.43.0
+
