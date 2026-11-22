@@ -1,0 +1,149 @@
+From eabe2b3bd60931681f5a232a68491ace8d6499df Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 23:02:25 -0300
+Subject: [PATCH] =?UTF-8?q?Diagn=C3=B3stico=20por=20movimiento=20y=20opcio?=
+ =?UTF-8?q?nes=20--tracker=20/=20--compensar?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- El lado de destino de la línea se deduce de hacia dónde avanza la mayoría de
+  las pistas, así un tubo sin cruces también se clasifica (nace_pasada,
+  muere_antes) en vez de quedar en sin_referencia.
+- contar_video y diagnostico_conteo aceptan --tracker (config de ByteTrack);
+  contar_video acepta además --compensar.
+- configs/bytetrack_sensible.yaml: ByteTrack más permisivo (umbrales más bajos,
+  match_thresh 0.95) para peces que saltan ~100 px entre cuadros.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KaqjLPGZuPqbmmmBqgjmsa
+---
+ configs/bytetrack_sensible.yaml | 12 ++++++++++++
+ src/contar_video.py             | 14 +++++++++++---
+ src/diagnostico_conteo.py       | 14 ++++++++++----
+ tests/test_conteo_robusto.py    |  2 +-
+ 4 files changed, 34 insertions(+), 8 deletions(-)
+ create mode 100644 configs/bytetrack_sensible.yaml
+
+diff --git a/configs/bytetrack_sensible.yaml b/configs/bytetrack_sensible.yaml
+new file mode 100644
+index 0000000..8c6c2c0
+--- /dev/null
++++ b/configs/bytetrack_sensible.yaml
+@@ -0,0 +1,12 @@
++# ByteTrack más permisivo, para videos donde el pez salta ~100 px entre cuadros y el
++# detector lo ve con poca confianza. Parte de la configuración por defecto de ultralytics
++# (bytetrack.yaml) y cambia solo lo de abajo. Usar junto con --conf 0.15.
++#
++#   uv run python -m src.diagnostico_conteo ... --conf 0.15 --tracker configs/bytetrack_sensible.yaml
++tracker_type: bytetrack
++track_high_thresh: 0.15   # por defecto 0.25: acepta detecciones menos seguras
++track_low_thresh: 0.05    # por defecto 0.1
++new_track_thresh: 0.15    # por defecto 0.25: permite iniciar una pista con un pez poco seguro
++track_buffer: 30          # sin cambio
++match_thresh: 0.95        # por defecto 0.8: exige menos solape entre cuadros (peces que saltan)
++fuse_score: True          # sin cambio
+diff --git a/src/contar_video.py b/src/contar_video.py
+index 5ff64b5..4ce1282 100644
+--- a/src/contar_video.py
++++ b/src/contar_video.py
+@@ -56,6 +56,7 @@ def ejecutar(
+     max_cuadros: int | None = None,
+     modelo: str = "",
+     parametros: dict | None = None,
++    compensar_confirmacion: int = 1,
+ ) -> dict:
+     """Procesa un video completo. `detector` es cualquier objeto con un método
+     procesar(frame, cuadro) -> list[Deteccion] (así se puede probar sin YOLO)."""
+@@ -63,7 +64,8 @@ def ejecutar(
+ 
+     salida = Path(salida)
+     salida.mkdir(parents=True, exist_ok=True)
+-    contador = ContadorCanales(canales, min_hits=min_hits)
++    contador = ContadorCanales(canales, min_hits=min_hits,
++                               compensar_confirmacion=compensar_confirmacion)
+ 
+     cap = cv2.VideoCapture(str(video))
+     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+@@ -121,6 +123,10 @@ def main() -> None:
+     p.add_argument("--conf", type=float, default=0.25)
+     p.add_argument("--imgsz", type=int, default=640)
+     p.add_argument("--min-hits", type=int, default=1)
++    p.add_argument("--compensar", type=int, default=1,
++                   help="cuadros que se compensa el retraso de confirmación de ByteTrack (0 = no)")
++    p.add_argument("--tracker", default="bytetrack.yaml",
++                   help="config del tracker, p. ej. configs/bytetrack_sensible.yaml")
+     p.add_argument("--max-cuadros", type=int, default=None)
+     p.add_argument("--sin-video", action="store_true")
+     args = p.parse_args()
+@@ -128,11 +134,13 @@ def main() -> None:
+     from src.detector import Detector
+ 
+     canales = cargar_canales(args.canales)
+-    detector = Detector(args.pesos, conf=args.conf, imgsz=args.imgsz)
++    detector = Detector(args.pesos, conf=args.conf, imgsz=args.imgsz, tracker=args.tracker)
+     res = ejecutar(
+         detector, args.video, canales, args.salida, min_hits=args.min_hits,
+         anotar=not args.sin_video, max_cuadros=args.max_cuadros, modelo=args.pesos,
+-        parametros={"conf": args.conf, "imgsz": args.imgsz},
++        parametros={"conf": args.conf, "imgsz": args.imgsz, "tracker": args.tracker,
++                    "compensar": args.compensar},
++        compensar_confirmacion=args.compensar,
+     )
+     print(json.dumps(res, indent=2, ensure_ascii=False))
+ 
+diff --git a/src/diagnostico_conteo.py b/src/diagnostico_conteo.py
+index 3fd3227..de65d00 100644
+--- a/src/diagnostico_conteo.py
++++ b/src/diagnostico_conteo.py
+@@ -57,13 +57,17 @@ def diagnosticar(detecciones_por_cuadro: dict[int, list], canales: list[Canal],
+         propias = {tid: pts for tid, pts in pistas.items()
+                    if sum(c.contiene(p[1], p[2]) for p in pts) * 2 >= len(pts)}
+         estado: dict[int, str] = {}
+-        lado_final = Counter()
++        # Lado de destino de la línea: hacia donde avanza la mayoría de las pistas
++        # (no se usa quién cruza, para poder clasificar también un tubo sin cruces).
++        hacia = Counter(
++            _orientacion(a, b, pts[-1][1:]) > _orientacion(a, b, pts[0][1:])
++            for pts in propias.values() if len(pts) > 1
++        )
++        destino = hacia.most_common(1)[0][0] if hacia else None
+         for tid, pts in propias.items():
+             if any(cruce_de_linea((p[1], p[2]), (q[1], q[2]), a, b) is not None
+                    for p, q in zip(pts, pts[1:])):
+                 estado[tid] = "cruza"
+-                lado_final[_orientacion(a, b, pts[-1][1:]) >= 0] += 1
+-        destino = lado_final.most_common(1)[0][0] if lado_final else None
+         saltos, filas_canal = [], []
+         for tid, pts in propias.items():
+             if tid not in estado:
+@@ -117,13 +121,15 @@ def main() -> None:
+     p.add_argument("--salida", default="diagnostico")
+     p.add_argument("--conf", type=float, default=0.25)
+     p.add_argument("--imgsz", type=int, default=640)
++    p.add_argument("--tracker", default="bytetrack.yaml",
++                   help="config del tracker, p. ej. configs/bytetrack_sensible.yaml")
+     p.add_argument("--max-cuadros", type=int, default=None)
+     args = p.parse_args()
+ 
+     from src.detector import Detector, leer_video  # YOLO se carga solo aquí
+ 
+     canales = cargar_canales(args.canales)
+-    detector = Detector(args.pesos, conf=args.conf, imgsz=args.imgsz)
++    detector = Detector(args.pesos, conf=args.conf, imgsz=args.imgsz, tracker=args.tracker)
+     por_cuadro: dict[int, list] = {}
+     alto = ancho = 1
+     for cuadro, _t, frame in leer_video(args.video):
+diff --git a/tests/test_conteo_robusto.py b/tests/test_conteo_robusto.py
+index 75b6550..abbbc92 100644
+--- a/tests/test_conteo_robusto.py
++++ b/tests/test_conteo_robusto.py
+@@ -169,4 +169,4 @@ def test_diagnostico_asigna_cada_pista_a_su_tubo():
+             por_cuadro.setdefault(i, []).append(D(id=tid, cx_n=x, cy_n=y))
+     r = diagnosticar(por_cuadro, [a, b], alto_px=1000)
+     assert r["resumen"]["pistas_por_canal"] == {"a": 1, "b": 1}
+-    assert r["resumen"]["por_estado"] == {"a": {"cruza": 1}, "b": {"sin_referencia": 1}}
++    assert r["resumen"]["por_estado"] == {"a": {"cruza": 1}, "b": {"muere_antes": 1}}
+-- 
+2.43.0
+

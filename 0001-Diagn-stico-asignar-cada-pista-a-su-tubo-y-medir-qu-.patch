@@ -1,0 +1,142 @@
+From 579da2174a4e53e41be4c1fbf61b42430da63f82 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 22:04:38 -0300
+Subject: [PATCH] =?UTF-8?q?Diagn=C3=B3stico:=20asignar=20cada=20pista=20a?=
+ =?UTF-8?q?=20su=20tubo=20y=20medir=20qu=C3=A9=20tan=20pasada=20nace?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Cada pista se evalúa solo contra el tubo donde pasa la mayor parte de sus
+  cuadros (antes se comparaba con la línea de todos los tubos).
+- Nuevas columnas y_linea_px y saltos_pasada: a cuántos saltos de la línea
+  queda la primera posición con id de una pista que nace pasada la línea.
+- Se informa también el conteo compensando 2 cuadros.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KaqjLPGZuPqbmmmBqgjmsa
+---
+ src/diagnostico_conteo.py    | 46 ++++++++++++++++++++++++++----------
+ tests/test_conteo_robusto.py | 19 ++++++++++++++-
+ 2 files changed, 51 insertions(+), 14 deletions(-)
+
+diff --git a/src/diagnostico_conteo.py b/src/diagnostico_conteo.py
+index e17b412..3fd3227 100644
+--- a/src/diagnostico_conteo.py
++++ b/src/diagnostico_conteo.py
+@@ -39,52 +39,72 @@ def diagnosticar(detecciones_por_cuadro: dict[int, list], canales: list[Canal],
+             if d.id is not None:
+                 pistas[d.id].append((cuadro, d.cx_n, d.cy_n))
+ 
+-    # Cuántos peces cuenta el contador, con y sin compensación del retraso de confirmación.
++    # Cuántos peces cuenta el contador según cuántos cuadros se compense el retraso del tracker.
+     conteos = {}
+-    for comp in (0, 1):
++    for comp in (0, 1, 2):
+         cont = ContadorCanales(canales, compensar_confirmacion=comp)
+         for cuadro in sorted(detecciones_por_cuadro):
+             cont.actualizar(cuadro, float(cuadro),
+                             [(d.id, d.cx_n, d.cy_n) for d in detecciones_por_cuadro[cuadro]])
+         conteos[comp] = dict(cont.conteos)
+ 
+-    filas, saltos, huecos_total = [], [], 0
++    filas, por_estado, pistas_canal, saltos_canal = [], {}, {}, {}
++    huecos_total = 0
+     for c in [c for c in canales if c.seleccionado]:
+         a, b = c.linea
++        y_linea = (a[1] + b[1]) / 2
++        # Una pista pertenece al tubo donde pasa la mitad o más de sus cuadros.
++        propias = {tid: pts for tid, pts in pistas.items()
++                   if sum(c.contiene(p[1], p[2]) for p in pts) * 2 >= len(pts)}
+         estado: dict[int, str] = {}
+         lado_final = Counter()
+-        for tid, pts in pistas.items():
++        for tid, pts in propias.items():
+             if any(cruce_de_linea((p[1], p[2]), (q[1], q[2]), a, b) is not None
+                    for p, q in zip(pts, pts[1:])):
+                 estado[tid] = "cruza"
+                 lado_final[_orientacion(a, b, pts[-1][1:]) >= 0] += 1
+         destino = lado_final.most_common(1)[0][0] if lado_final else None
+-        for tid, pts in pistas.items():
++        saltos, filas_canal = [], []
++        for tid, pts in propias.items():
+             if tid not in estado:
+                 if destino is None:
+                     estado[tid] = "sin_referencia"
+                 else:
+                     primer_lado = _orientacion(a, b, pts[0][1:]) >= 0
+                     estado[tid] = "nace_pasada" if primer_lado == destino else "muere_antes"
+-            pts_canal = pts
+-            huecos = sum(q[0] - p[0] - 1 for p, q in zip(pts_canal, pts_canal[1:]) if q[0] - p[0] > 1)
++            huecos = sum(q[0] - p[0] - 1 for p, q in zip(pts, pts[1:]) if q[0] - p[0] > 1)
+             huecos_total += huecos
+-            paso = [abs(q[2] - p[2]) * alto_px for p, q in zip(pts_canal, pts_canal[1:]) if q[0] - p[0] == 1]
++            paso = [abs(q[2] - p[2]) * alto_px for p, q in zip(pts, pts[1:]) if q[0] - p[0] == 1]
+             saltos += paso
+-            filas.append({
++            filas_canal.append({
+                 "canal": c.id, "id": tid, "estado": estado[tid],
+                 "cuadro_ini": pts[0][0], "cuadro_fin": pts[-1][0], "cuadros": len(pts),
+                 "cuadros_perdidos": huecos,
+                 "y_ini_px": round(pts[0][2] * alto_px, 1), "y_fin_px": round(pts[-1][2] * alto_px, 1),
++                "y_linea_px": round(y_linea * alto_px, 1),
+                 "salto_max_px": round(max(paso), 1) if paso else 0.0,
++                "saltos_pasada": "",
+             })
++        salto_med = statistics.median(saltos) if saltos else 0.0
++        for f in filas_canal:
++            # A cuántos saltos de la línea quedó la primera posición con id de una pista
++            # "nace_pasada": 1 a 2 saltos = la compensación puede rescatarla; mucho más =
++            # el detector o el tracker no la vio al entrar al tubo.
++            if f["estado"] == "nace_pasada" and salto_med:
++                f["saltos_pasada"] = round(abs(f["y_ini_px"] - f["y_linea_px"]) / salto_med, 1)
++        filas += filas_canal
++        pistas_canal[c.id] = len(propias)
++        saltos_canal[c.id] = round(salto_med, 1)
++        por_estado[c.id] = dict(Counter(f["estado"] for f in filas_canal))
+     resumen = {
+-        "pistas": len(pistas),
+-        "por_estado": dict(Counter(f["estado"] for f in filas)),
+-        "salto_mediano_px": round(statistics.median(saltos), 1) if saltos else 0.0,
++        "pistas_total": len(pistas),
++        "pistas_por_canal": pistas_canal,
++        "por_estado": por_estado,
++        "salto_mediano_px": saltos_canal,
+         "cuadros_perdidos_en_pistas": huecos_total,
+         "conteo_sin_compensar": conteos[0],
+-        "conteo_compensado": conteos[1],
++        "conteo_compensando_1_cuadro": conteos[1],
++        "conteo_compensando_2_cuadros": conteos[2],
+     }
+     return {"resumen": resumen, "pistas": filas}
+ 
+diff --git a/tests/test_conteo_robusto.py b/tests/test_conteo_robusto.py
+index fdb6365..75b6550 100644
+--- a/tests/test_conteo_robusto.py
++++ b/tests/test_conteo_robusto.py
+@@ -152,4 +152,21 @@ def test_diagnostico_clasifica_las_pistas():
+     estados = {f["id"]: f["estado"] for f in r["pistas"]}
+     assert estados == {1: "cruza", 2: "nace_pasada", 3: "muere_antes"}
+     assert r["resumen"]["conteo_sin_compensar"] == {"a": 1}
+-    assert r["resumen"]["salto_mediano_px"] == pytest.approx(100.0, abs=25)
++    assert r["resumen"]["salto_mediano_px"]["a"] == pytest.approx(100.0, abs=25)
++    pasada = next(f for f in r["pistas"] if f["id"] == 2)
++    assert pasada["saltos_pasada"] == pytest.approx(1.2, abs=0.6)  # nace ~1 salto pasada la línea
++
++
++def test_diagnostico_asigna_cada_pista_a_su_tubo():
++    from types import SimpleNamespace as D
++    from src.diagnostico_conteo import diagnosticar
++
++    a = Canal("a", "A", [(0.0, 0.0), (0.4, 0.0), (0.4, 1.0), (0.0, 1.0)])
++    b = Canal("b", "B", [(0.6, 0.0), (1.0, 0.0), (1.0, 1.0), (0.6, 1.0)])
++    por_cuadro: dict[int, list] = {}
++    for tid, x, ys in ((1, 0.2, [0.1, 0.3, 0.7, 0.9]), (2, 0.8, [0.1, 0.2, 0.3])):
++        for i, y in enumerate(ys):
++            por_cuadro.setdefault(i, []).append(D(id=tid, cx_n=x, cy_n=y))
++    r = diagnosticar(por_cuadro, [a, b], alto_px=1000)
++    assert r["resumen"]["pistas_por_canal"] == {"a": 1, "b": 1}
++    assert r["resumen"]["por_estado"] == {"a": {"cruza": 1}, "b": {"sin_referencia": 1}}
+-- 
+2.43.0
+
