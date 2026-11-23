@@ -28,7 +28,7 @@ from .reproductor import VELOCIDADES, Reproductor
 from .vista_video import VistaVideo
 
 log = logging.getLogger(__name__)
-PESOS_DEFECTO = Path(__file__).resolve().parent.parent / "weights" / "exp_01.pt"
+PESOS_DEFECTO = Path(__file__).resolve().parent.parent / "weights" / "exp_00_base.pt"
 PASO_LINEA = 0.01  # lo que mueven los botones ◀ ▶ (fracción del ancho del video)
 
 NOMBRES_CAPAS = {

@@ -26,7 +26,8 @@ Instala las dependencias fijadas en `uv.lock` con Python 3.13 (versión indicada
 uv run python -m interfaz
 ```
 
-Los pesos del modelo (`weights/exp_01.pt`) vienen en el repo.
+Los pesos del modelo (`weights/exp_00_base.pt`, YOLOv8n entrenado con el dataset de Duotek) vienen en el repo.
+`weights/exp_01.pt` es el modelo anterior del Lab 15.
 
 ## Cómo se usa
 
@@ -139,7 +140,7 @@ interfaz/    Ventana en PySide6
   recursos/              Logo de Duotek
 scripts/     Preparación del dataset (reparto train/val/test y validación)
 tests/       Pruebas automáticas
-weights/     Pesos del modelo (solo exp_01.pt)
+weights/     Pesos del modelo (exp_00_base.pt por defecto y exp_01.pt)
 configs/     Configs de entrenamiento para los datos de Duotek
 lab15/       Código, configs, logs y notebook del Lab 15 (histórico, no se usa)
 docs/        Origen del código del Lab 15 (origen_y_cambios_lab15.md) y cambios de la

@@ -91,10 +91,37 @@ Es el valor por defecto de la aplicación y de `contar_video`; ByteTrack sigue d
   --secuencia data/seq_0003.tar --canales canales.json --esperados 10`. Los datos y videos
   no se suben al repositorio.
 
+### 5.1 Modelo por defecto: `exp_00_base` (YOLOv8n con el dataset de Duotek)
+
+Se entrenó con las 36 secuencias de train (50 épocas, T4 de Colab, 3,7 h; mismos
+hiperparámetros que `exp_01`). YOLO26 no se entrenó por tiempo.
+
+| Reparto | Precisión | Recall | mAP@0,5 | mAP@0,5:0,95 |
+|---|---|---|---|---|
+| Validación (7 sec.) | 0,976 | 0,966 | 0,992 | 0,768 |
+| Test (6 sec.) | 0,955 | 0,968 | 0,990 | 0,832 |
+
+**Conteo** (SeguidorCentros, `min_hits = 2`; contados / reales; `seq_0003` y `seq_0004` con `conf` 0,25 y `seq_0006` con `conf` 0,4). `exp_01` se
+entrenó con `seq_0001, 0003, 0005 y 0006`, así que solo `seq_0004` le era desconocida;
+para `exp_00_base` las tres secuencias son datos que nunca vio.
+
+| Secuencia | `exp_01` | `exp_00_base` |
+|---|---|---|
+| `seq_0003` | 10 / 10 (vista en entrenamiento) | 10 / 10 |
+| `seq_0004` | 9 / 9 | 12 / 9 (11 con `conf` 0,4 o 0,5) |
+| `seq_0006` | 47 / 46 (vista en entrenamiento) | 47 / 46 (46 con `min_hits` 3) |
+
+- Total con `exp_00_base`: 69 contados de 65 reales (+6 %), con 12 en `seq_0004`.
+  Con las cajas etiquetadas el seguidor cuenta exacto en `seq_0004` (9) y `seq_0006` (46) y 11
+  en `seq_0003`, así que el exceso viene del detector.
+- `seq_0004` es la limitación conocida: sobrecuenta. Subir `conf` casi no cambia las
+  detecciones (117 a 109), por lo que las sobrantes son seguras; hipótesis sin comprobar:
+  peces reales en cuadros que en el Lab 15 quedaron sin etiquetar.
+
 ## 6. Pendiente
 
-- [ ] Entrenar la línea base y la variante con el dataset de Duotek y completar la tabla
-      comparativa (mAP@0,5, precisión, recall en validación y error de conteo por canal).
+- [x] Entrenar la línea base con el dataset de Duotek (hecho; YOLO26 queda descartado por tiempo).
+- [ ] Completar la tabla comparativa con el error de conteo por canal.
 - [ ] Conversor de etiquetas de Label Studio al formato YOLO y adaptación de `prepare_data.py`.
 - [ ] Probar las mejoras contra falsos positivos (filtro por canal, `conf`, `min_hits`,
       doble conteo por cambio de ID) y registrar el efecto de cada una.
