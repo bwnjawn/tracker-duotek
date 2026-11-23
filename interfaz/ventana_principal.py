@@ -28,7 +28,7 @@ from .reproductor import VELOCIDADES, Reproductor
 from .vista_video import VistaVideo
 
 log = logging.getLogger(__name__)
-PESOS_DEFECTO = Path(__file__).resolve().parent.parent / "weights" / "exp_01.pt"
+PESOS_DEFECTO = Path(__file__).resolve().parent.parent / "weights" / "exp_00_base.pt"
 PASO_LINEA = 0.01  # lo que mueven los botones ◀ ▶ (fracción del ancho del video)
 
 NOMBRES_CAPAS = {
@@ -88,7 +88,9 @@ def crear_detector_real():
         )
     from src.detector import Detector  # import perezoso: torch tarda en cargar
 
-    return Detector(str(PESOS_DEFECTO))
+    # "centros": seguidor por posición del centro (src/seguidor.py). ByteTrack no confirmaba
+    # a los peces que saltan casi su largo entre cuadros y subcontaba (ver docs/).
+    return Detector(str(PESOS_DEFECTO), tracker="centros")
 
 
 class VentanaPrincipal(QMainWindow):

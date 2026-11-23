@@ -1,0 +1,12 @@
+# ByteTrack más permisivo, para videos donde el pez salta ~100 px entre cuadros y el
+# detector lo ve con poca confianza. Parte de la configuración por defecto de ultralytics
+# (bytetrack.yaml) y cambia solo lo de abajo. Usar junto con --conf 0.15.
+#
+#   uv run python -m src.diagnostico_conteo ... --conf 0.15 --tracker configs/bytetrack_sensible.yaml
+tracker_type: bytetrack
+track_high_thresh: 0.15   # por defecto 0.25: acepta detecciones menos seguras
+track_low_thresh: 0.05    # por defecto 0.1
+new_track_thresh: 0.15    # por defecto 0.25: permite iniciar una pista con un pez poco seguro
+track_buffer: 30          # sin cambio
+match_thresh: 0.95        # por defecto 0.8: exige menos solape entre cuadros (peces que saltan)
+fuse_score: True          # sin cambio

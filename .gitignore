@@ -27,9 +27,10 @@ Dataset*/
 runs/
 labelstudio/
 
-# Pesos: solo se versiona el modelo por defecto (exp_01); el resto se comparte aparte
+# Pesos: solo se versionan el modelo por defecto (exp_00_base) y el anterior (exp_01); el resto se comparte aparte
 *.pt
 !weights/exp_01.pt
+!weights/exp_00_base.pt
 
 # Notas internas del grupo (no se suben)
 spec/

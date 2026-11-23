@@ -51,10 +51,19 @@ class Detector:
         imgsz: int = 640,
         tracker: str = "bytetrack.yaml",
         device: str | None = None,
+        seguidor_centros: dict | None = None,
     ) -> None:
+        """tracker: config de ByteTrack, o "centros" para usar SeguidorCentros (src/seguidor.py),
+        que da el id desde la primera detección y empareja por la posición del centro.
+        seguidor_centros: parámetros opcionales de SeguidorCentros (solo con tracker="centros")."""
         from ultralytics import YOLO  # import perezoso: acelera el arranque de la app
 
         self.modelo = YOLO(pesos)
+        self._seguidor = None
+        if tracker == "centros":
+            from src.seguidor import SeguidorCentros
+
+            self._seguidor = SeguidorCentros(**(seguidor_centros or {}))
         self.conf = conf
         self.imgsz = imgsz
         self.tracker = tracker
@@ -64,10 +73,14 @@ class Detector:
         """Descarta el estado del tracker. Llamar al saltar a otro cuadro del
         video o al cambiar de video, para no mezclar pistas."""
         self.modelo.predictor = None
+        if self._seguidor is not None:
+            self._seguidor.reiniciar()
 
     def procesar(self, frame_bgr, cuadro: int) -> list[Deteccion]:
         """Detecta y sigue peces en un cuadro (imagen BGR de OpenCV)."""
         alto, ancho = frame_bgr.shape[:2]
+        if self._seguidor is not None:
+            return self._procesar_con_centros(frame_bgr, cuadro, ancho, alto)
         r = self.modelo.track(
             frame_bgr,
             persist=True,
@@ -86,6 +99,23 @@ class Detector:
         for (x1, y1, x2, y2), c, tid in zip(cajas, confs, ids):
             salida.append(Deteccion(cuadro, tid, x1, y1, x2, y2, float(c), ancho, alto))
         return salida
+
+    def _procesar_con_centros(self, frame_bgr, cuadro: int, ancho: int, alto: int) -> list[Deteccion]:
+        r = self.modelo.predict(
+            frame_bgr, conf=self.conf, imgsz=self.imgsz, device=self.device, verbose=False
+        )[0]
+        if r.boxes is None or len(r.boxes) == 0:
+            self._seguidor.actualizar(cuadro, [])
+            return []
+        cajas = r.boxes.xyxy.tolist()
+        confs = r.boxes.conf.tolist()
+        ids = self._seguidor.actualizar(
+            cuadro, [((x1 + x2) / 2 / ancho, (y1 + y2) / 2 / alto) for x1, y1, x2, y2 in cajas]
+        )
+        return [
+            Deteccion(cuadro, tid, x1, y1, x2, y2, float(c), ancho, alto)
+            for (x1, y1, x2, y2), c, tid in zip(cajas, confs, ids)
+        ]
 
 
 def leer_video(ruta: str) -> Iterator[tuple[int, float, object]]:

@@ -26,7 +26,8 @@ Instala las dependencias fijadas en `uv.lock` con Python 3.13 (versión indicada
 uv run python -m interfaz
 ```
 
-Los pesos del modelo (`weights/exp_01.pt`) vienen en el repo.
+Los pesos del modelo (`weights/exp_00_base.pt`, YOLOv8n entrenado con el dataset de Duotek) vienen en el repo.
+`weights/exp_01.pt` es el modelo anterior del Lab 15.
 
 ## Cómo se usa
 
@@ -80,6 +81,17 @@ El primer comando deja el dataset en `dataset/dataset_segmentado/dataset_yolo/`,
 `data.yaml` que usan los configs `exp_00_base` y `exp_04_yolo26`. Los pasos de `scripts/`,
 el reparto elegido y su justificación están en [scripts/README.md](scripts/README.md).
 
+Si el dataset trae una carpeta intermedia (`dataset/dataset/images/...`), no importa: los scripts buscan
+solos la carpeta que tiene `images/`, `labels/` y `tracking/`.
+
+Para entrenar en Google Colab (GPU gratis) usa [notebooks/entrenar_duotek_colab.ipynb](notebooks/entrenar_duotek_colab.ipynb):
+copia el dataset al disco de Colab, hace el reparto, entrena la base y YOLO26 y guarda pesos y logs en Drive.
+En cualquier máquina, `--data RUTA/data.yaml` reemplaza la clave `data` del config:
+
+```
+uv run python -m src.entrenar --config configs/exp_04_yolo26.yaml --data RUTA/data.yaml
+```
+
 Al entrenar, los pesos quedan en `weights/<nombre>.pt`, las métricas en `logs/` y las corridas
 completas en `runs/` (esta última no se sube a git).
 
@@ -107,11 +119,15 @@ si está seleccionado y el sentido de conteo (0 cuenta cruces en cualquier senti
 ```
 src/         Módulos de IA y lógica
   canales.py     Canal (polígono, línea, selección) y su guardado y carga
-  detector.py    YOLO + ByteTrack sobre un cuadro
+  detector.py    YOLO + seguidor sobre un cuadro (SeguidorCentros por defecto; ByteTrack opcional)
+  seguidor.py    SeguidorCentros: ids por posición del centro, desde la primera detección
   contador.py    Un contador por canal; un id suma una vez al cruzar la línea
   servicio.py    Analiza un video completo con progreso, pausa y cancelación
   contar_video.py, exportador.py, eval_conteo.py, entrenar.py   Otras herramientas
                      (entrenar.py entrena con un data.yaml cualquiera)
+  comparar_seguidores.py   Mide qué seguidor cuenta mejor en una secuencia, con y sin etiquetas
+  secuencia_a_video.py     Arma un .mp4 a partir de una secuencia (.tar, .zip o carpeta)
+  diagnostico_conteo.py    Detalle por pista de qué peces se pierden y dónde
 interfaz/    Ventana en PySide6
   ventana_principal.py   Ventana: video, asistente de 4 etapas y marcador de conteo
   vista_video.py         Dibuja el video, las líneas de los tubos y las capas (cajas, IDs, ruta)
@@ -124,7 +140,7 @@ interfaz/    Ventana en PySide6
   recursos/              Logo de Duotek
 scripts/     Preparación del dataset (reparto train/val/test y validación)
 tests/       Pruebas automáticas
-weights/     Pesos del modelo (solo exp_01.pt)
+weights/     Pesos del modelo (exp_00_base.pt por defecto y exp_01.pt)
 configs/     Configs de entrenamiento para los datos de Duotek
 lab15/       Código, configs, logs y notebook del Lab 15 (histórico, no se usa)
 docs/        Origen del código del Lab 15 (origen_y_cambios_lab15.md) y cambios de la

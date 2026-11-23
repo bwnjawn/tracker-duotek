@@ -119,3 +119,12 @@ def test_config_incompleto_o_data_inexistente(tmp_path):
     ruta2.write_text(yaml.safe_dump(cfg2))
     with pytest.raises(SystemExit):
         E.cargar_config(ruta2)
+
+
+def test_cargar_config_acepta_otro_data_yaml(tmp_path):
+    ruta, cfg = _config(tmp_path)
+    otro = tmp_path / "otro.yaml"
+    otro.write_text("path: .\ntrain: a\nval: b\nnc: 1\nnames: [fish]\n")
+    assert E.cargar_config(ruta, otro)["data"] == str(otro)
+    with pytest.raises(SystemExit):
+        E.cargar_config(ruta, tmp_path / "no_existe.yaml")
