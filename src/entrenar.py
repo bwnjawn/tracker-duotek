@@ -10,6 +10,7 @@ Adaptado de src/train.py y src/evaluate.py del Lab 15. Cambios principales:
 
 Uso (desde la raíz del repo):
     uv run python -m src.entrenar --config configs/exp_04_yolo26.yaml
+    uv run python -m src.entrenar --config configs/exp_00_base.yaml --data /content/dataset/dataset_segmentado/dataset_yolo/data.yaml
     uv run python -m src.entrenar --evaluar weights/exp_04_yolo26.pt --data ruta/data.yaml --split val
 
 El config usa las mismas claves que lab15/configs/exp_01.yaml, más `data`
@@ -69,9 +70,13 @@ def fijar_semilla(semilla: int) -> None:
         pass
 
 
-def cargar_config(ruta: str | Path) -> dict:
+def cargar_config(ruta: str | Path, data: str | Path | None = None) -> dict:
+    """Lee el YAML del experimento. `data` reemplaza la clave `data` del config (útil en Colab,
+    donde el dataset queda en otra ruta que la del config)."""
     with open(ruta, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+    if data:
+        cfg["data"] = str(data)
     faltan = [k for k in CLAVES_OBLIGATORIAS if k not in cfg]
     if faltan:
         raise SystemExit(f"Faltan claves en {ruta}: {faltan}")
@@ -181,7 +186,7 @@ def main() -> None:
     p.add_argument("--epochs", type=int, default=None, help="reemplaza epochs del config (prueba rápida)")
     p.add_argument("--nombre", default=None, help="reemplaza el nombre del config")
     p.add_argument("--evaluar", metavar="PESOS", help="solo evalúa estos pesos")
-    p.add_argument("--data", help="data.yaml (con --evaluar)")
+    p.add_argument("--data", help="data.yaml (con --evaluar; con --config reemplaza la clave 'data')")
     p.add_argument("--split", choices=["val", "test"], default="val")
     p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--device", default=None)
@@ -196,7 +201,7 @@ def main() -> None:
     if not args.config:
         p.error("Indica --config o --evaluar")
 
-    cfg = cargar_config(args.config)
+    cfg = cargar_config(args.config, args.data)
     if args.epochs:
         cfg["epochs"] = args.epochs
     if args.nombre:
