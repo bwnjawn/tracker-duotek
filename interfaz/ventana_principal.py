@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow,
     QMessageBox, QProgressBar, QPushButton, QSlider, QStackedWidget, QVBoxLayout, QWidget,
@@ -117,10 +117,7 @@ class VentanaPrincipal(QMainWindow):
         self._linea_sel = 0
         self.vista = VistaVideo()
 
-        # --- cabecera: logo, abrir video y configuración
-        logo = QLabel()
-        logo.setPixmap(QPixmap(str(estilo.RECURSOS / "duotek.png")).scaledToHeight(
-            30, Qt.SmoothTransformation))
+        # --- cabecera: abrir video y configuración
         self.btn_abrir = _boton("Abrir video…", "carpeta", "primario")
         self.lbl_archivo = _etiqueta("Sin video", "apagado")
         self.btn_cargar = _boton("Cargar config", "subir", "fantasma")
@@ -128,7 +125,6 @@ class VentanaPrincipal(QMainWindow):
         cab = QHBoxLayout()
         cab.setContentsMargins(16, 8, 16, 8)
         cab.setSpacing(14)
-        cab.addWidget(logo)
         cab.addWidget(_etiqueta("Contador de peces", "apagado"))
         cab.addSpacing(8)
         cab.addWidget(self.btn_abrir)

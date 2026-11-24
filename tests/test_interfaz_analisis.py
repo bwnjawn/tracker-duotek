@@ -186,13 +186,18 @@ def test_cerrar_la_ventana_durante_el_analisis(app, video):
 
 def test_exportar_resultados(app, video, avisos, tmp_path):
     v = ventana(app, video, DetectorLento())
-    assert not v.btn_exportar.isEnabled()  # sin análisis no hay nada que exportar
+    # el botón siempre está activo; sin análisis, al pulsarlo avisa qué falta
+    assert v.btn_exportar.isEnabled()
+    v.exportar_resultados(carpeta=str(tmp_path / "vacia"))
+    assert "todavía no está procesado" in avisos[-1]
+    assert not (tmp_path / "vacia").exists()
 
     v.btn_analizar.click()
     esperar(app, lambda: v._hilo is None)
     assert v.btn_exportar.isEnabled()
 
     salida = tmp_path / "salida"
+    salida.mkdir()  # la ventana exige que la carpeta ya exista
     v.exportar_resultados(carpeta=str(salida))
     for nombre in ("resultados.json", "detecciones.csv", "eventos.csv"):
         assert (salida / nombre).exists()
@@ -200,13 +205,26 @@ def test_exportar_resultados(app, video, avisos, tmp_path):
     assert str(salida) in avisos[-1]  # el aviso dice dónde quedaron los archivos
 
 
-def test_cancelar_deja_el_boton_exportar_apagado(app, video):
+def test_exportar_a_una_carpeta_que_no_existe_avisa(app, video, avisos, tmp_path):
+    v = ventana(app, video, DetectorLento())
+    v.btn_analizar.click()
+    esperar(app, lambda: v._hilo is None)
+    inexistente = tmp_path / "no_existe"
+    v.exportar_resultados(carpeta=str(inexistente))
+    assert "La carpeta no existe" in avisos[-1]
+    assert not inexistente.exists()
+
+
+def test_cancelar_no_deja_resultado_que_exportar(app, video, avisos, tmp_path):
     v = ventana(app, video, DetectorLento(demora=0.05))
     v.btn_analizar.click()
     esperar(app, lambda: v.progreso.value() > 0)
     v.btn_cancelar.click()
     esperar(app, lambda: v._hilo is None)
-    assert not v.btn_exportar.isEnabled()
+    assert v.resultado is None
+    v.exportar_resultados(carpeta=str(tmp_path / "salida"))
+    assert "todavía no está procesado" in avisos[-1]
+    assert not (tmp_path / "salida").exists()
 
 
 def test_muestra_el_conteo_mientras_analiza(app, video):
@@ -272,7 +290,7 @@ def test_mover_una_linea_descarta_el_resultado(app, video):
     assert v.resultado is not None and v.btn_exportar.isEnabled()
 
     v.btn_der.click()  # cambia la posición de la línea
-    assert v.resultado is None and not v.btn_exportar.isEnabled()
+    assert v.resultado is None
     assert "contar de nuevo" in v.lbl_resultado.text()
     assert v.conteo.valor(0) == "—"
     v._ir_a_etapa(2)
@@ -331,7 +349,7 @@ def test_despues_de_contar_el_video_muestra_los_peces_y_cuando_se_cuentan(app, v
 
 def test_las_capas_se_prenden_y_se_apagan(app):
     v = VentanaPrincipal()
-    assert all(v.vista.capas.values()) and set(v.btn_capas) == {"cajas", "ids", "ruta", "lineas"}
+    assert all(v.vista.capas.values()) and set(v.btn_capas) == {"cajas", "ids", "ruta", "lineas", "conteo"}
     v.btn_capas["ids"].click()
     assert not v.vista.capas["ids"] and v.vista.capas["cajas"]
     v.btn_capas["ids"].click()

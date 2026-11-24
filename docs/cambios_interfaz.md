@@ -16,7 +16,7 @@ cualquiera del grupo pueda entender el código nuevo sin leer todos los commits.
 - El **conteo por tubo** se ve en grande y sube **mientras se cuenta**, con el video
   visible: cajas, números (ID) y ruta de cada pez.
 - Se agregó el botón **Exportar resultados**, que antes no existía en la ventana.
-- Nuevo aspecto: paleta de Duotek (sacada del logo), logo, iconos y tipografía más fina.
+- Nuevo aspecto: paleta de Duotek (sacada del logo), iconos y tipografía más fina.
 - Se agregaron botones de **velocidad** (0.25× a 4×).
 - **No se tocó `src/`** (detector, contador, canales, servicio, exportador). El archivo de
   canales sigue siendo el mismo JSON de Luis, así que el Validador no se ve afectado.
@@ -87,7 +87,7 @@ espera a que haya un resultado; mientras se cuenta no se cambia de etapa.
 | `ad6cc9e` | mostrar el conteo por tubo mientras se analiza | El hilo avisa el conteo de cada tubo apenas cambia; la ventana lo muestra en vivo |
 | `3e76512` | agregar cálculo de tubos a partir de líneas verticales | Lógica pura en `interfaz/canales.py`: repartir, mover, crear tubos y volver a leerlos |
 | `89eb8be` | reemplazar los rectángulos por líneas verticales para marcar tubos | Vista y ventana trabajan con líneas; guardar y cargar con mensaje para archivos viejos |
-| `4d626d3` | rediseñar la interfaz con la paleta de Duotek y un asistente por etapas | Estilo, logo, iconos, etapas, marcador por tubo y velocidad |
+| `4d626d3` | rediseñar la interfaz con la paleta de Duotek y un asistente por etapas | Estilo, iconos, etapas, marcador por tubo y velocidad |
 | `eb2e0eb` | renombrar el análisis a conteo y hacer que el marcador siga al video | «Iniciar conteo», controles apagados, «Seguir» condicionado, resultado descartable |
 | `e3f5815` | mostrar el video con cajas, IDs y rutas mientras se cuenta | Capas sobre el video, durante el conteo y al reproducir después |
 
@@ -101,7 +101,6 @@ espera a que haya un resultado; mientras se cuenta no se cambia de etapa.
 | `interfaz/iconos.py` | Iconos de línea (estilo Lucide) dibujados desde SVG, del color que pida cada botón |
 | `interfaz/panel_conteo.py` | El marcador por tubo (casillas con el conteo, clicables) y la barra de 4 segmentos de las etapas |
 | `interfaz/capas.py` | Lógica pura de lo que se dibuja sobre cada pez: caja, ID, ruta y si ya se contó |
-| `interfaz/recursos/duotek.png` | Logo de Duotek para la cabecera |
 | `tests/test_tubos.py` | Pruebas de las líneas y los tubos |
 | `tests/test_interfaz_lineas.py` | Pruebas de la ventana con líneas: agregar, quitar, arrastrar, guardar y cargar |
 | `tests/test_interfaz_estilo.py` | Pruebas de las etapas, la velocidad y el marcador |
@@ -117,7 +116,6 @@ espera a que haya un resultado; mientras se cuenta no se cambia de etapa.
 | `interfaz/hilo_analisis.py` | Nuevas señales `conteos` y `fotograma`; envía imagen reducida y marcas de los peces, limitado a 15 por segundo | Mostrar el conteo y el video en vivo sin congelar la ventana |
 | `interfaz/reproductor.py` | Velocidad (`cambiar_velocidad`, señal `velocidad_cambiada`) | Botones de velocidad del mockup |
 | `README.md` | La sección «Cómo se usa» describe el flujo nuevo | Que el uso documentado coincida con la app |
-| `.gitignore` | Excepción para `interfaz/recursos/*.png` | El repo ignora todos los `.png`, y el logo debe subirse |
 | `prueba_interfaz.py` | Reescrito para el modelo de líneas | El anterior usaba rectángulos y casillas que ya no existen |
 | `tests/test_interfaz_analisis.py` | Pruebas ajustadas al modelo de 2 tubos, y 10 pruebas nuevas | Exportar, conteo en vivo, controles apagados, descartar resultado, capas |
 
