@@ -137,7 +137,6 @@ interfaz/    Ventana en PySide6
   capas.py               Marcas que se dibujan sobre cada pez (lógica pura)
   panel_conteo.py        Marcador por tubo y barra de etapas
   estilo.py, iconos.py   Paleta de Duotek, hoja de estilo (QSS) e iconos
-  recursos/              Logo de Duotek
 scripts/     Preparación del dataset (reparto train/val/test y validación)
 tests/       Pruebas automáticas
 weights/     Pesos del modelo (exp_00_base.pt por defecto y exp_01.pt)
