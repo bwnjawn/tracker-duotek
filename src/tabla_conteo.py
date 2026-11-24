@@ -55,9 +55,11 @@ class Config:
 # Edita esta lista para probar otras combinaciones. La primera es la línea base.
 CONFIGS = [
     Config("base (conf .25, hits 2)", 0.25, 2),
+    Config("base + perdido 5", 0.25, 2, 5),
+    Config("base + perdido 8", 0.25, 2, 8),
+    Config("solo conf .30 (hits 2)", 0.30, 2),
+    Config("solo hits 3 (conf .25)", 0.25, 3),
     Config("nueva (conf .30, hits 3)", 0.30, 3),
-    Config("nueva + perdido 5", 0.30, 3, 5),
-    Config("nueva + perdido 8", 0.30, 3, 8),
 ]
 
 
