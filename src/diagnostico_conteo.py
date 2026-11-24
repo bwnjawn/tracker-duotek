@@ -1,199 +1,154 @@
-"""Diagnóstico: ¿de dónde salen los conteos extra? (y por qué sube con max_perdido)
+"""Diagnóstico del conteo: explica por qué un video da menos (o más) peces de los esperados.
 
-Para cada secuencia corre el seguidor con varios `max_perdido` y compara cada conteo del
-sistema con las trayectorias etiquetadas (gt.txt). Cada cruce contado se asocia al pez real
-cuya caja más se le solapa en ese cuadro, y los conteos se clasifican en:
+Corre el detector sobre un video y clasifica cada pista (id) del tracker respecto a la
+línea de cada canal:
 
-  bien            peces reales contados al menos una vez
-  duplicado       un pez real contado otra vez por un ID que COEXISTIÓ con el anterior
-                  (dos cajas sobre el mismo pez)
-  id perdido      un pez real contado otra vez por un ID que nació DESPUÉS de que el anterior
-                  desapareciera (el seguidor perdió al pez y le dio otro número)
-  sin pez real    conteo cuya caja no se solapa con ningún pez etiquetado (falso positivo)
-  no contados     peces reales que nunca se contaron
+  cruza            el pez atravesó la línea: se cuenta
+  nace_pasada      su primera posición con id ya estaba pasada la línea: ningún método
+                   basado en cruce puede contarlo (el tracker lo "descubrió" tarde)
+  muere_antes      el id desapareció antes de llegar a la línea (pista cortada o pez perdido)
+  sin_referencia   no hay ningún pez que cruce, no se sabe qué lado es "pasada"
 
-Si al subir max_perdido crecen "duplicado" o "id perdido", ahí está la explicación.
+Además informa el salto típico entre cuadros (si es grande respecto del tubo, los peces
+"saltan" la línea), los huecos dentro de una pista y cuántos peces cuenta el contador con y
+sin compensación del retraso de confirmación.
 
-Uso (desde la raíz del repo; los datos de Duotek no salen de tu PC):
-    uv run python -m src.diagnostico_conteo --split val
-    uv run python -m src.diagnostico_conteo --split val --secuencias 15,55 --perdidos 3,8
-
-Salida: tabla en pantalla (solo números y números de cuadro, se puede compartir).
+    uv run python -m src.diagnostico_conteo --pesos weights/exp_01.pt \\
+        --video clip.mp4 --canales canales.json --salida diagnostico/
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import sys
-from collections import defaultdict
+import statistics
+from collections import Counter, defaultdict
 from pathlib import Path
 
-from src.canales import Canal
-from src.comparar_seguidores import (
-    CajasSimples, _Centros, cargar_fuente, numero_de_cuadro,
-)
-from src.contador import ContadorCanales
-from src.tabla_conteo import RAIZ, canal_unico, detectar, filtrar_conf
-
-sys.path.insert(0, str(RAIZ / "scripts"))
-
-IOU_MIN = 0.3
+from src.canales import Canal, cargar_canales
+from src.contador import ContadorCanales, _orientacion, cruce_de_linea
 
 
-def iou(a, b) -> float:
-    x1, y1 = max(a[0], b[0]), max(a[1], b[1])
-    x2, y2 = min(a[2], b[2]), min(a[3], b[3])
-    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
-    return inter / union if union > 0 else 0.0
+def diagnosticar(detecciones_por_cuadro: dict[int, list], canales: list[Canal],
+                 alto_px: int = 1, ancho_px: int = 1) -> dict:
+    """`detecciones_por_cuadro`: cuadro -> lista de objetos con .id, .cx_n y .cy_n (TODAS las
+    detecciones del cuadro, no solo las que caen dentro de un canal)."""
+    pistas: dict[int, list[tuple[int, float, float]]] = defaultdict(list)
+    for cuadro in sorted(detecciones_por_cuadro):
+        for d in detecciones_por_cuadro[cuadro]:
+            if d.id is not None:
+                pistas[d.id].append((cuadro, d.cx_n, d.cy_n))
 
+    # Cuántos peces cuenta el contador según cuántos cuadros se compense el retraso del tracker.
+    conteos = {}
+    for comp in (0, 1, 2):
+        cont = ContadorCanales(canales, compensar_confirmacion=comp)
+        for cuadro in sorted(detecciones_por_cuadro):
+            cont.actualizar(cuadro, float(cuadro),
+                            [(d.id, d.cx_n, d.cy_n) for d in detecciones_por_cuadro[cuadro]])
+        conteos[comp] = dict(cont.conteos)
 
-def leer_gt_cajas(ruta: Path) -> dict[int, list[tuple[int, tuple]]]:
-    """gt.txt (MOT: cuadro,id,x,y,w,h,...) -> {cuadro: [(id, (x1,y1,x2,y2))]}."""
-    por_cuadro: dict[int, list] = defaultdict(list)
-    with open(ruta, newline="", encoding="utf-8") as f:
-        for fila in csv.reader(f):
-            try:
-                c, i = int(float(fila[0])), int(float(fila[1]))
-                x, y, w, h = (float(v) for v in fila[2:6])
-            except (ValueError, IndexError):
-                continue
-            por_cuadro[c].append((i, (x, y, x + w, y + h)))
-    return por_cuadro
-
-
-def _xyxy(cajas: CajasSimples):
-    return [(x - w / 2, y - h / 2, x + w / 2, y + h / 2) for x, y, w, h in cajas.xywh]
-
-
-def mejor_gt(caja, gt_cuadro) -> int | None:
-    mejor, mejor_iou = None, IOU_MIN
-    for gid, g in gt_cuadro:
-        v = iou(caja, g)
-        if v >= mejor_iou:
-            mejor, mejor_iou = gid, v
-    return mejor
-
-
-def alinear(cuadros, numeros, gt, rango: int = 400) -> tuple[int, float]:
-    """Desfase entre el número del archivo y el cuadro del gt.txt (se busca en +-rango)."""
-    total = sum(len(c) for c in cuadros) or 1
-    mejor = (0, 0)
-    for off in range(-rango, rango + 1):
-        aciertos = 0
-        for cajas, n in zip(cuadros, numeros):
-            g = gt.get(n + off, [])
-            aciertos += sum(1 for b in _xyxy(cajas) if mejor_gt(b, g) is not None)
-        if aciertos > mejor[1] or (aciertos == mejor[1] == 0 and off == 0):
-            mejor = (off, aciertos)
-    return mejor[0], mejor[1] / total
-
-
-def correr(cuadros, numeros, ancho, alto, canales: list[Canal], min_hits: int, perdido: int):
-    """Seguidor + contador. Devuelve (eventos, caja de cada ID por cuadro, cuadros de cada ID)."""
-    seg = _Centros(max_perdido=perdido)
-    cont = ContadorCanales(canales, min_hits=min_hits, compensar_confirmacion=1)
-    cajas_id: dict[int, dict[int, tuple]] = {}
-    frames_id: dict[int, set[int]] = defaultdict(set)
-    for cajas, n in zip(cuadros, numeros):
-        ids = seg.ids(cajas, n, ancho, alto) if len(cajas) else seg.ids(CajasSimples([], []), n, ancho, alto)
-        pts, por = [], {}
-        for (x, y, w, h), tid in zip(cajas.xywh, ids):
-            if tid is None:
-                continue
-            pts.append((tid, float(x) / ancho, float(y) / alto))
-            por[tid] = (x - w / 2, y - h / 2, x + w / 2, y + h / 2)
-            frames_id[tid].add(n)
-        cajas_id[n] = por
-        cont.actualizar(n, n / 10, pts)
-    return cont.eventos, cajas_id, frames_id
-
-
-def clasificar(eventos, cajas_id, frames_id, gt, off: int) -> dict:
-    por_pez: dict[int, list] = defaultdict(list)
-    sin_pez = []
-    for ev in eventos:
-        caja = cajas_id.get(ev.cuadro, {}).get(ev.id)
-        gid = mejor_gt(caja, gt.get(ev.cuadro + off, [])) if caja else None
-        (sin_pez.append(ev) if gid is None else por_pez[gid].append(ev))
-    reales = {gid for lista in gt.values() for gid, _ in lista}
-    duplicados, perdidos, ejemplos = 0, 0, []
-    for gid, evs in por_pez.items():
-        evs.sort(key=lambda e: e.cuadro)
-        for k in range(1, len(evs)):
-            previos = {e.id for e in evs[:k]}
-            actual = evs[k]
-            coexiste = any(frames_id[p] & frames_id[actual.id] for p in previos)
-            if coexiste:
-                duplicados += 1
-            else:
-                perdidos += 1
-            if len(ejemplos) < 4:
-                ejemplos.append(f"pez {gid}: IDs {sorted(previos)} y {actual.id}, cuadro "
-                                f"{actual.cuadro} ({'dos cajas a la vez' if coexiste else 'ID nuevo'})")
-    return {"eventos": len(eventos), "reales": len(reales), "bien": len(por_pez),
-            "duplicado": duplicados, "id_perdido": perdidos, "sin_pez": len(sin_pez),
-            "no_contados": len(reales - set(por_pez)), "ejemplos": ejemplos}
+    filas, por_estado, pistas_canal, saltos_canal = [], {}, {}, {}
+    huecos_total = 0
+    for c in [c for c in canales if c.seleccionado]:
+        a, b = c.linea
+        y_linea = (a[1] + b[1]) / 2
+        # Una pista pertenece al tubo donde pasa la mitad o más de sus cuadros.
+        propias = {tid: pts for tid, pts in pistas.items()
+                   if sum(c.contiene(p[1], p[2]) for p in pts) * 2 >= len(pts)}
+        estado: dict[int, str] = {}
+        # Lado de destino de la línea: hacia donde avanza la mayoría de las pistas
+        # (no se usa quién cruza, para poder clasificar también un tubo sin cruces).
+        hacia = Counter(
+            _orientacion(a, b, pts[-1][1:]) > _orientacion(a, b, pts[0][1:])
+            for pts in propias.values() if len(pts) > 1
+        )
+        destino = hacia.most_common(1)[0][0] if hacia else None
+        for tid, pts in propias.items():
+            if any(cruce_de_linea((p[1], p[2]), (q[1], q[2]), a, b) is not None
+                   for p, q in zip(pts, pts[1:])):
+                estado[tid] = "cruza"
+        saltos, filas_canal = [], []
+        for tid, pts in propias.items():
+            if tid not in estado:
+                if destino is None:
+                    estado[tid] = "sin_referencia"
+                else:
+                    primer_lado = _orientacion(a, b, pts[0][1:]) >= 0
+                    estado[tid] = "nace_pasada" if primer_lado == destino else "muere_antes"
+            huecos = sum(q[0] - p[0] - 1 for p, q in zip(pts, pts[1:]) if q[0] - p[0] > 1)
+            huecos_total += huecos
+            paso = [abs(q[2] - p[2]) * alto_px for p, q in zip(pts, pts[1:]) if q[0] - p[0] == 1]
+            saltos += paso
+            filas_canal.append({
+                "canal": c.id, "id": tid, "estado": estado[tid],
+                "cuadro_ini": pts[0][0], "cuadro_fin": pts[-1][0], "cuadros": len(pts),
+                "cuadros_perdidos": huecos,
+                "y_ini_px": round(pts[0][2] * alto_px, 1), "y_fin_px": round(pts[-1][2] * alto_px, 1),
+                "y_linea_px": round(y_linea * alto_px, 1),
+                "salto_max_px": round(max(paso), 1) if paso else 0.0,
+                "saltos_pasada": "",
+            })
+        salto_med = statistics.median(saltos) if saltos else 0.0
+        for f in filas_canal:
+            # A cuántos saltos de la línea quedó la primera posición con id de una pista
+            # "nace_pasada": 1 a 2 saltos = la compensación puede rescatarla; mucho más =
+            # el detector o el tracker no la vio al entrar al tubo.
+            if f["estado"] == "nace_pasada" and salto_med:
+                f["saltos_pasada"] = round(abs(f["y_ini_px"] - f["y_linea_px"]) / salto_med, 1)
+        filas += filas_canal
+        pistas_canal[c.id] = len(propias)
+        saltos_canal[c.id] = round(salto_med, 1)
+        por_estado[c.id] = dict(Counter(f["estado"] for f in filas_canal))
+    resumen = {
+        "pistas_total": len(pistas),
+        "pistas_por_canal": pistas_canal,
+        "por_estado": por_estado,
+        "salto_mediano_px": saltos_canal,
+        "cuadros_perdidos_en_pistas": huecos_total,
+        "conteo_sin_compensar": conteos[0],
+        "conteo_compensando_1_cuadro": conteos[1],
+        "conteo_compensando_2_cuadros": conteos[2],
+    }
+    return {"resumen": resumen, "pistas": filas}
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--pesos", default="weights/exp_00_base.pt")
-    p.add_argument("--datasets", type=Path, default=RAIZ / "dataset")
-    p.add_argument("--split", required=True, choices=("train", "val", "test"))
-    p.add_argument("--secuencias", help="solo estos números de secuencia, separados por coma")
-    p.add_argument("--perdidos", default="3,5,8", help="valores de max_perdido a comparar")
+    p.add_argument("--pesos", required=True)
+    p.add_argument("--video", required=True)
+    p.add_argument("--canales", required=True, help="JSON de canales del Tracker")
+    p.add_argument("--salida", default="diagnostico")
     p.add_argument("--conf", type=float, default=0.25)
-    p.add_argument("--min-hits", type=int, default=2)
     p.add_argument("--imgsz", type=int, default=640)
-    a = p.parse_args()
+    p.add_argument("--tracker", default="bytetrack.yaml",
+                   help="config del tracker, p. ej. configs/bytetrack_sensible.yaml")
+    p.add_argument("--max-cuadros", type=int, default=None)
+    args = p.parse_args()
 
-    from _comun import localizar_dataset, numero_secuencia, salida_por_defecto
-    from ultralytics import YOLO
+    from src.detector import Detector, leer_video  # YOLO se carga solo aquí
 
-    perdidos = [int(x) for x in a.perdidos.split(",")]
-    numeros_ok = {int(x) for x in a.secuencias.split(",")} if a.secuencias else None
-    trk = salida_por_defecto(a.datasets) / "dataset_tracking" / a.split
-    imagenes = localizar_dataset(a.datasets) / "images"
-    modelo = YOLO(a.pesos)
-    canales = canal_unico()
-    cols = ["eventos", "reales", "bien", "duplicado", "id_perdido", "sin_pez", "no_contados"]
-    total = {p_: dict.fromkeys(cols, 0) for p_ in perdidos}
+    canales = cargar_canales(args.canales)
+    detector = Detector(args.pesos, conf=args.conf, imgsz=args.imgsz, tracker=args.tracker)
+    por_cuadro: dict[int, list] = {}
+    alto = ancho = 1
+    for cuadro, _t, frame in leer_video(args.video):
+        if args.max_cuadros is not None and cuadro >= args.max_cuadros:
+            break
+        dets = detector.procesar(frame, cuadro)
+        por_cuadro[cuadro] = dets
+        alto, ancho = frame.shape[:2]
 
-    print(f"{'secuencia':<20}{'perdido':>8}" + "".join(f"{c:>12}" for c in cols))
-    for gt_txt in sorted(trk.glob("*/gt/gt.txt")):
-        nombre = gt_txt.parent.parent.name
-        if numeros_ok and numero_secuencia(nombre) not in numeros_ok:
-            continue
-        gt = leer_gt_cajas(gt_txt)
-        nombres, imgs = cargar_fuente(imagenes / nombre)
-        numeros = [numero_de_cuadro(n, i) for i, n in enumerate(nombres)]
-        cuadros, ancho, alto = detectar(modelo, imgs, a.conf, a.imgsz)
-        cuadros = filtrar_conf(cuadros, a.conf)
-        off, tasa = alinear(cuadros, numeros, gt)
-        gt_c = sorted(gt)
-        gx = max((b[2] for v in gt.values() for _, b in v), default=0)
-        gy = max((b[3] for v in gt.values() for _, b in v), default=0)
-        print(f"  [{nombre}] imágenes: cuadros {numeros[0]}..{numeros[-1]} ({len(numeros)}), "
-              f"tamaño {ancho}x{alto} | gt: cuadros {gt_c[0]}..{gt_c[-1]} ({len(gt_c)}), "
-              f"x2 máx {gx:.0f}, y2 máx {gy:.0f} | desfase {off}, coinciden {tasa:.0%}")
-        if tasa < 0.5:
-            print(f"  AVISO {nombre}: solo {tasa:.0%} de las cajas coinciden con el gt (desfase {off}); "
-                  "la clasificación puede no ser fiable.")
-        for perdido in perdidos:
-            ev, cajas_id, frames_id = correr(cuadros, numeros, ancho, alto, canales, a.min_hits, perdido)
-            r = clasificar(ev, cajas_id, frames_id, gt, off)
-            for c in cols:
-                total[perdido][c] += r[c]
-            print(f"{nombre:<20}{perdido:>8}" + "".join(f"{r[c]:>12}" for c in cols))
-            for e in r["ejemplos"][:2]:
-                print(f"{'':<28}{e}")
-
-    print("\nTOTAL")
-    print(f"{'':<20}{'perdido':>8}" + "".join(f"{c:>12}" for c in cols))
-    for perdido in perdidos:
-        print(f"{'':<20}{perdido:>8}" + "".join(f"{total[perdido][c]:>12}" for c in cols))
+    r = diagnosticar(por_cuadro, canales, alto_px=alto, ancho_px=ancho)
+    salida = Path(args.salida)
+    salida.mkdir(parents=True, exist_ok=True)
+    with open(salida / "pistas.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(r["pistas"][0].keys()) if r["pistas"] else ["canal"])
+        w.writeheader()
+        w.writerows(r["pistas"])
+    for k, v in r["resumen"].items():
+        print(f"{k}: {v}")
+    print(f"Detalle por pista en {salida / 'pistas.csv'}")
 
 
 if __name__ == "__main__":
